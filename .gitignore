@@ -1,5 +1,38 @@
+# Runtime data (SQLite DB, encryption key)
 data/
-*.pyc
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment
 .env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
 *.log
