@@ -1,0 +1,6 @@
+flask>=3.0
+werkzeug>=3.0
+cryptography>=41.0
+futu-api>=9.0
+requests>=2.31
+gunicorn>=21.2

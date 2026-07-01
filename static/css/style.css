@@ -1,0 +1,221 @@
+/* ─── Reset & Base ─── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+    --bg: #0f1117;
+    --bg-card: #1a1d26;
+    --bg-input: #252830;
+    --border: #2d3040;
+    --text: #e4e6eb;
+    --text-muted: #8b8fa3;
+    --primary: #4f8cff;
+    --primary-hover: #3a74e0;
+    --success: #22c55e;
+    --danger: #ef4444;
+    --warning: #f59e0b;
+    --radius: 8px;
+}
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    min-height: 100vh;
+}
+
+/* ─── Navbar ─── */
+.navbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 24px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+.nav-brand { font-size: 1.2rem; font-weight: 700; }
+.nav-links { display: flex; align-items: center; gap: 12px; }
+.nav-user { color: var(--text-muted); font-size: 0.9rem; }
+
+/* ─── Buttons ─── */
+.btn {
+    display: inline-block;
+    padding: 8px 18px;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.2s;
+    color: #fff;
+}
+.btn-primary { background: var(--primary); }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-success { background: var(--success); }
+.btn-success:hover { opacity: 0.85; }
+.btn-danger { background: var(--danger); }
+.btn-danger:hover { opacity: 0.85; }
+.btn-outline {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+}
+.btn-outline:hover { border-color: var(--primary); color: var(--primary); }
+.btn-sm { padding: 4px 12px; font-size: 0.8rem; }
+.btn-block { width: 100%; }
+.btn-xs { padding: 2px 8px; font-size: 0.75rem; }
+
+/* ─── Container ─── */
+.container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 24px;
+}
+
+/* ─── Cards ─── */
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 20px;
+}
+.card h3 { margin-bottom: 16px; font-size: 1.1rem; }
+
+/* Summary Cards */
+.summary-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 20px;
+}
+.summary-card { text-align: center; }
+.card-label { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 6px; }
+.card-value { font-size: 1.6rem; font-weight: 700; }
+.card-value.positive { color: var(--success); }
+.card-value.negative { color: var(--danger); }
+
+/* ─── Period Selector ─── */
+.period-selector {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+.period-btn {
+    padding: 6px 16px;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s;
+}
+.period-btn:hover { border-color: var(--primary); color: var(--primary); }
+.period-btn.active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+/* ─── Chart ─── */
+.chart-container {
+    position: relative;
+    height: 380px;
+}
+
+/* ─── Tables ─── */
+.table { width: 100%; border-collapse: collapse; }
+.table th, .table td {
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+}
+.table th { color: var(--text-muted); font-size: 0.85rem; font-weight: 600; }
+.table-responsive { overflow-x: auto; }
+.text-center { text-align: center; }
+.text-muted { color: var(--text-muted); }
+
+/* ─── Forms ─── */
+.form-group {
+    margin-bottom: 16px;
+}
+.form-group label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+}
+.form-group input, .form-group textarea, .form-group select {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 0.95rem;
+}
+.form-group input:focus, .form-group textarea:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+.form-row {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+.form-row .form-group { flex: 1; min-width: 180px; }
+
+/* ─── Login Page ─── */
+.login-page {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    background: linear-gradient(135deg, #0f1117 0%, #1a1d2e 100%);
+}
+.login-container { width: 100%; max-width: 400px; padding: 24px; }
+.login-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px;
+}
+.login-header {
+    text-align: center;
+    margin-bottom: 28px;
+}
+.login-header h1 { font-size: 1.5rem; margin-bottom: 4px; }
+.login-header p { color: var(--text-muted); font-size: 0.9rem; }
+
+/* Flash */
+.flash { padding: 10px; border-radius: var(--radius); margin-bottom: 14px; font-size: 0.9rem; }
+.flash.error { background: rgba(239,68,68,0.15); color: var(--danger); }
+.flash.success { background: rgba(34,197,94,0.15); color: var(--success); }
+
+/* ─── Account Config Row ─── */
+.account-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+    padding: 12px;
+    background: var(--bg-input);
+    border-radius: var(--radius);
+}
+.account-row .form-group { margin-bottom: 0; min-width: 120px; }
+.account-row .btn-danger { align-self: flex-end; margin-bottom: 2px; }
+
+/* ─── Responsive ─── */
+@media (max-width: 600px) {
+    .container { padding: 12px; }
+    .summary-cards { grid-template-columns: 1fr 1fr; }
+    .card-value { font-size: 1.2rem; }
+    .navbar { padding: 10px 14px; }
+    .period-selector { gap: 4px; }
+    .period-btn { padding: 4px 10px; font-size: 0.8rem; }
+    .chart-container { height: 260px; }
+}

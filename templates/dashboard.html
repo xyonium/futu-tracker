@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Portfolio Tracker</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">📊 Portfolio Tracker</div>
+        <div class="nav-links">
+            <span class="nav-user">{{ username }}</span>
+            {% if is_admin %}
+            <a href="/admin" class="btn btn-sm btn-outline">管理后台</a>
+            {% endif %}
+            <a href="/logout" class="btn btn-sm btn-danger">退出</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <!-- Summary Cards -->
+        <div class="summary-cards" id="summaryCards">
+            <div class="card summary-card">
+                <div class="card-label">总资产 (HKD)</div>
+                <div class="card-value" id="totalAssets">--</div>
+            </div>
+            <div class="card summary-card">
+                <div class="card-label">当前净值</div>
+                <div class="card-value" id="currentNav">--</div>
+            </div>
+            <div class="card summary-card">
+                <div class="card-label">盈亏比例</div>
+                <div class="card-value" id="pnlPct">--</div>
+            </div>
+            <div class="card summary-card">
+                <div class="card-label">盈亏金额 (HKD)</div>
+                <div class="card-value" id="pnlAmount">--</div>
+            </div>
+        </div>
+
+        <!-- Period Selector -->
+        <div class="card">
+            <div class="period-selector">
+                <button class="period-btn" data-period="3m">近3个月</button>
+                <button class="period-btn" data-period="6m">近6个月</button>
+                <button class="period-btn" data-period="12m">近12个月</button>
+                <button class="period-btn" data-period="ytd">今年以来</button>
+                <button class="period-btn active" data-period="all">成立以来</button>
+            </div>
+            <div class="chart-container">
+                <canvas id="navChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Account Breakdown -->
+        <div class="card">
+            <h3>账户明细 <span id="detailDate" class="text-muted"></span></h3>
+            <div class="table-responsive">
+                <table class="table" id="accountTable">
+                    <thead>
+                        <tr>
+                            <th>账户</th>
+                            <th>币种</th>
+                            <th>原币资产</th>
+                            <th>汇率</th>
+                            <th>折合 HKD</th>
+                        </tr>
+                    </thead>
+                    <tbody id="accountBody">
+                        <tr><td colspan="5" class="text-center text-muted">暂无数据</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

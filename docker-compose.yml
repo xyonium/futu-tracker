@@ -1,0 +1,19 @@
+version: "3.8"
+services:
+  web:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-please-change-this-secret}
+    restart: unless-stopped
+
+  # Optional: run OpenD alongside (requires Futu OpenD binary)
+  # opend:
+  #   image: your-opend-image
+  #   ports:
+  #     - "11111:11111"
+  #   volumes:
+  #     - ./opend_config:/root/.futuopend

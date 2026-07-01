@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Portfolio Tracker - Admin</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">📊 Portfolio Tracker - 管理后台</div>
+        <div class="nav-links">
+            <span class="nav-user">{{ username }}</span>
+            <a href="/" class="btn btn-sm btn-outline">返回仪表盘</a>
+            <a href="/logout" class="btn btn-sm btn-danger">退出</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <!-- Futu Connection Config -->
+        <div class="card">
+            <h3>Futu OpenD 连接配置</h3>
+            <form id="futuConfigForm">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>OpenD 地址</label>
+                        <input type="text" id="futuHost" placeholder="127.0.0.1">
+                    </div>
+                    <div class="form-group">
+                        <label>OpenD 端口</label>
+                        <input type="number" id="futuPort" placeholder="11111">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>RSA 私钥 (用于解锁交易，留空则不更新)</label>
+                    <textarea id="futuRsaKey" rows="4" placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"></textarea>
+                    <small id="rsaKeyStatus" class="text-muted"></small>
+                </div>
+            </form>
+        </div>
+
+        <!-- Portfolio Config -->
+        <div class="card">
+            <h3>投资组合配置</h3>
+            <form id="portfolioConfigForm">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>初始日期 (inception date)</label>
+                        <input type="date" id="inceptionDate">
+                    </div>
+                    <div class="form-group">
+                        <label>初始金额 (HKD)</label>
+                        <input type="number" id="initialCapital" step="0.01" placeholder="1000000">
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <!-- Account Configuration -->
+        <div class="card">
+            <h3>账户配置</h3>
+            <div id="accountsContainer"></div>
+            <button class="btn btn-outline" onclick="addAccountRow()">+ 添加账户</button>
+        </div>
+
+        <div style="margin-bottom:20px;">
+            <button class="btn btn-primary" onclick="saveAllConfig()">保存所有配置</button>
+            <button class="btn btn-success" onclick="triggerSync()" style="margin-left:10px;">立即同步数据</button>
+            <span id="saveStatus" class="text-muted" style="margin-left:10px;"></span>
+        </div>
+
+        <!-- User Management -->
+        <div class="card">
+            <h3>用户管理</h3>
+            <table class="table" id="userTable">
+                <thead>
+                    <tr>
+                        <th>用户名</th>
+                        <th>角色</th>
+                        <th>创建时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="userBody"></tbody>
+            </table>
+            <hr>
+            <h4>添加用户</h4>
+            <form id="addUserForm" class="form-row" style="align-items:flex-end;">
+                <div class="form-group">
+                    <label>用户名</label>
+                    <input type="text" id="newUsername" required>
+                </div>
+                <div class="form-group">
+                    <label>密码</label>
+                    <input type="password" id="newPassword" required>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="newIsAdmin"> 管理员
+                    </label>
+                </div>
+                <div class="form-group">
+                    <button type="button" class="btn btn-primary" onclick="addUser()">添加</button>
+                </div>
+            </form>
+        </div>
+    </main>
+
+    <script src="/static/js/admin.js"></script>
+</body>
+</html>
