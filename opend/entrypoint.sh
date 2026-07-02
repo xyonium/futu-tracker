@@ -143,6 +143,15 @@ fi
 
 # ───── Render config ────────────────────────────────────────────────────
 
+# Auto-generate RSA keypair on first boot (needed when OpenD listens on 0.0.0.0
+# — the SDK requires encryption for non-localhost connections).
+if [ ! -f "$DATA/rsa_private.pem" ]; then
+    log "generating RSA keypair..."
+    openssl genrsa -out "$DATA/rsa_private.pem" 2048 2>/dev/null
+    openssl rsa -in "$DATA/rsa_private.pem" -pubout -out "$DATA/rsa_public.pem" 2>/dev/null
+    chmod 600 "$DATA/rsa_private.pem"
+fi
+
 /usr/local/bin/render-config.sh > "$CFG"
 log "rendered config to $CFG"
 

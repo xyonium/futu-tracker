@@ -143,6 +143,7 @@ def _open_context(host, port, firm_name):
         port=int(port),
         security_firm=firm,
         filter_trdmarket=ft.TrdMarket.NONE,   # widest filter — matches skill guidance
+        is_encrypt=True,                      # required when OpenD listens on 0.0.0.0
     )
 
 

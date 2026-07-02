@@ -48,5 +48,9 @@ ${PWD_XML}
     <future_trade_api_time_zone>UTC+8</future_trade_api_time_zone>
     <pdt_protection>1</pdt_protection>
     <dtcall_confirmation>1</dtcall_confirmation>
+    <!-- RSA encryption required because OpenD listens on 0.0.0.0 (docker bridge
+         network). The SDK detects non-localhost and refuses plaintext.
+         Private key is generated on first boot if not present. -->
+    <rsa_private_key>/data/rsa_private.pem</rsa_private_key>
 </futu_opend>
 XML
