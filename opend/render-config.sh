@@ -7,9 +7,13 @@
 #   FUTU_LANG          — chs | en (default chs)
 #   FUTU_LOG_LEVEL     — no | debug | info | warning | error | fatal
 #
-# We deliberately do NOT bake login_pwd_md5 into the config. Password entry
-# happens inside the VNC bootstrap GUI, and the OpenD saves the login token
-# to the userdata directory (which is what the fingerprint check protects).
+# Password entry for the FIRST-TIME VNC bootstrap happens in the GUI.
+# For subsequent headless CLI restarts, the password MD5 must be in the
+# config file so that the CLI process can re-authenticate automatically.
+# Set FUTU_LOGIN_PWD_MD5 in .env (generate with: echo -n 'mypass' | md5sum).
+#
+# The device fingerprint (Device.dat) is still required for a fully clean
+# login without SMS re-verification.
 
 set -e
 
@@ -18,6 +22,11 @@ set -e
 : "${FUTU_LANG:=chs}"
 : "${FUTU_LOG_LEVEL:=info}"
 
+PWD_XML=""
+if [ -n "${FUTU_LOGIN_PWD_MD5:-}" ]; then
+    PWD_XML="    <login_pwd_md5>${FUTU_LOGIN_PWD_MD5}</login_pwd_md5>"
+fi
+
 cat <<XML
 <?xml version="1.0" encoding="UTF-8"?>
 <futu_opend>
@@ -25,6 +34,7 @@ cat <<XML
     <ip>0.0.0.0</ip>
     <api_port>${FUTU_API_PORT}</api_port>
     <login_account>${FUTU_LOGIN_ACCOUNT}</login_account>
+${PWD_XML}
     <lang>${FUTU_LANG}</lang>
     <log_level>${FUTU_LOG_LEVEL}</log_level>
     <push_proto_type>0</push_proto_type>

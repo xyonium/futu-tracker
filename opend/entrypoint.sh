@@ -35,9 +35,11 @@ fingerprint_valid() {
         done < "$DATA/.fingerprint_paths"
         return 0
     fi
-    # Fallback probe (before first bootstrap has been done)
-    if find "$DATA/userdata" -maxdepth 4 -type f \
-         \( -iname 'SnFinger*' -o -iname '*device*' -o -iname 'AppData*' \) \
+    # Fallback probe (before first bootstrap has been done).
+    # OpenD 10.8 stores session under /data/.com.futunn.FutuOpenD/ (not
+    # userdata/), so we scan the whole /data tree.
+    if find "$DATA" -maxdepth 6 -type f \
+         \( -iname 'SnFinger*' -o -iname 'Device.dat' -o -iname 'AppData*' \) \
          -size +0c 2>/dev/null | grep -q .; then
         return 0
     fi
@@ -132,8 +134,8 @@ if [ "$INSTALLED" != "$TARGET_VERSION" ]; then
     install_opend
     # Version bump usually invalidates the fingerprint; force a fresh bootstrap
     rm -f "$DATA/.fingerprint_paths"
-    find "$DATA/userdata" -maxdepth 4 -type f \
-         \( -iname 'SnFinger*' -o -iname '*device*' -o -iname 'AppData*' \) \
+    find "$DATA" -maxdepth 6 -type f \
+         \( -iname 'SnFinger*' -o -iname 'Device.dat' -o -iname 'AppData*' \) \
          -delete 2>/dev/null || true
 else
     log "OpenD $TARGET_VERSION already installed"
