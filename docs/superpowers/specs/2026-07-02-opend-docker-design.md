@@ -234,11 +234,28 @@ docker compose up -d   # 重新走完整流程
 
 ## 10. 已知风险与未验证项
 
-- ⚠️ **OpenD 指纹文件路径未 100% 确认** —— 需要 bootstrap 首跑时 `find $DATA -newer <marker>` 摸清。已在 entrypoint 里预留了 debug 模式：`OPEND_DEBUG=1` 会 dump 所有新增文件到日志。
-- ⚠️ **AppImage 在 Docker 里依赖 FUSE** —— 用 `--appimage-extract-and-run` 绕开 FUSE 需求（AppImage 官方推荐做法）。
-- ⚠️ **Ubuntu 18.04 二进制在 22.04 容器里** —— 已本地跑通（版本字符串能打出来），但完整交易 API 未验证；bootstrap 结束前不清楚。若不兼容，可切 Ubuntu 20.04 base。
-- ⚠️ **首次 bootstrap 期间 6080 端口暴露公网** —— 靠 VNC 密码保护，密码是 20 位随机。若担心可以在 `.env` 里 `VNC_BIND=127.0.0.1:6080`，改成只本机可达，通过 SSH 端口转发访问。
-- ⚠️ **463 MB 的初次下载** —— 网速慢时容器首启会卡在 Stage 1 好几分钟。日志里有进度。
+- ✅ **OpenD 指纹文件路径未 100% 确认** —— entrypoint 首次 bootstrap 时会 `find`
+  出所有新出现的文件，把匹配 `SnFinger*` / `device*` / `AppData*` 命名模式的
+  路径写入 `/data/.fingerprint_paths`，之后启动只检查这几个候选路径。
+- ✅ **AppImage 在 Docker 里依赖 FUSE** —— 用 `--appimage-extract-and-run` 绕开
+  FUSE 需求（已在容器内 smoke test 验证 AppImage 能启动，进程可见于 `ps aux`）。
+- ✅ **Ubuntu 18.04 二进制在 22.04 容器里** —— 已本地跑通启动阶段。完整交易 API
+  调用需真实登录后验证。
+- ✅ **fetch-lasted-link 302 重定向** —— curl 探测确认 302 到
+  `Futu_OpenD_10.8.6808_Ubuntu18.04.tar.gz`；`wget` 默认跟随重定向。
+- ⚠️ **首次 bootstrap 期间 6080 端口暴露公网** —— 靠 VNC 密码保护，密码是 20 位
+  随机。若担心可以在 `.env` 里 `VNC_BIND=127.0.0.1`，改成只本机可达。
+- ⚠️ **463 MB 的初次下载** —— 网速慢时容器首启会卡在 Stage 1 好几分钟。日志里
+  有单行完成提示（`-nv`）。CI/air-gapped 场景可把 tarball 预置在
+  `/data/_seed.tgz`，entrypoint 会跳过下载。
+- ⚠️ **futu-api 版本** —— skill pack 要求 `>= 10.4.6408`。已把
+  `requirements.txt` 从 `>=9.0` 提到 `>=10.4.6408`。
+- ⚠️ **API 使用模式** —— 已按 skill pack 建议改造 `futu_client.py`：
+  - 用 `filter_trdmarket=TrdMarket.NONE` 打开一个上下文，客户端侧过滤账户
+    （避免部分账户被 SDK 隐藏）
+  - 保留 `acc_id` 为 int（避免 float64 精度丢失 18 位账号）
+  - 显式传 `currency` 参数给 `accinfo_query`
+  - 支持 SG/JP/MY/CA 市场扩展
 
 ## 11. 明确不做的事（YAGNI）
 
