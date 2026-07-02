@@ -360,7 +360,21 @@ def api_admin_config():
     if 'inception_date' in data:
         set_config('inception_date', data['inception_date'])
     if 'initial_capital' in data:
-        set_config('initial_capital', str(data['initial_capital']))
+        old_capital = float(get_config('initial_capital', '1000000'))
+        new_capital = float(data['initial_capital'])
+        set_config('initial_capital', str(new_capital))
+        # `nav` and `pnl_pct` in every historical daily_nav row were computed
+        # against the previous initial_capital. Changing the anchor without
+        # rebasing history would leave the equity curve inconsistent (older
+        # rows still divided by the old anchor). Recompute derived columns
+        # from stored total_assets_hkd — the raw asset value never changes.
+        if new_capital != old_capital and new_capital > 0:
+            with get_db() as conn:
+                conn.execute("""
+                    UPDATE daily_nav
+                       SET nav     = total_assets_hkd / ?,
+                           pnl_pct = (total_assets_hkd / ? - 1.0) * 100
+                """, (new_capital, new_capital))
     if 'accounts' in data:
         set_config('accounts', json.dumps(data['accounts']))
 
@@ -424,6 +438,17 @@ def api_change_password():
 # Initialize
 # ─────────────────────────────────────────────
 init_db()
+
+# Start the auto-sync scheduler (weekday 16:30 HKT + Sat 08:00 HKT).
+# Guarded by SCHEDULER_ENABLED so a multi-worker gunicorn deploy can
+# pin the scheduler to one worker; defaults on for the single-worker
+# `python app.py` container.
+if os.environ.get('SCHEDULER_ENABLED', '1') == '1':
+    try:
+        from scheduler import start_scheduler
+        start_scheduler()
+    except Exception as e:
+        print(f"[WARN] scheduler failed to start: {e}")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)

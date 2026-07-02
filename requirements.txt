@@ -5,3 +5,5 @@ cryptography>=41.0
 futu-api>=10.4.6408
 requests>=2.31
 gunicorn>=21.2
+# In-process cron for the daily-sync job (Asia/Hong_Kong timezone).
+APScheduler>=3.10
