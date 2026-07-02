@@ -37,6 +37,11 @@ cat <<XML
 ${PWD_XML}
     <lang>${FUTU_LANG}</lang>
     <log_level>${FUTU_LOG_LEVEL}</log_level>
+    <!-- Telnet console for interactive commands (e.g. SMS code entry).
+         Bound to 0.0.0.0 inside the container; only exposed on the docker
+         bridge network, not to the host. -->
+    <telnet_ip>0.0.0.0</telnet_ip>
+    <telnet_port>22222</telnet_port>
     <push_proto_type>0</push_proto_type>
     <price_reminder_push>1</price_reminder_push>
     <auto_hold_quote_right>1</auto_hold_quote_right>
