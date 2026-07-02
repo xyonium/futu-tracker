@@ -25,7 +25,6 @@ https://openapi.futunn.com/futu-api-doc/intro/ai.html):
 import json
 import sqlite3
 import os
-import requests
 from datetime import datetime, date
 from contextlib import contextmanager
 
@@ -66,35 +65,12 @@ def decrypt_rsa_key():
 # ─────────────────────────────────────────────
 # Exchange Rate (mid-rate)
 # ─────────────────────────────────────────────
-# Currency mapping: account currency -> HKD
-RATE_CACHE = {}
-
-def get_exchange_rate_to_hkd(currency: str, target_date: str = None) -> float:
-    """
-    Get exchange rate: 1 unit of `currency` = ? HKD.
-    Uses exchangerate.host or similar free API.
-    """
-    currency = currency.upper()
-    if currency == 'HKD':
-        return 1.0
-
-    cache_key = f"{currency}_{target_date or 'latest'}"
-    if cache_key in RATE_CACHE:
-        return RATE_CACHE[cache_key]
-
-    try:
-        if target_date:
-            url = f"https://api.exchangerate.host/{target_date}?base={currency}&symbols=HKD"
-        else:
-            url = f"https://api.exchangerate.host/latest?base={currency}&symbols=HKD"
-        resp = requests.get(url, timeout=10)
-        rate = float(resp.json()['rates']['HKD'])
-        RATE_CACHE[cache_key] = rate
-        return rate
-    except Exception as e:
-        print(f"[FX] Fallback rate for {currency}: {e}")
-        # Fallback approximate rates
-        return {'USD': 7.8, 'AUD': 5.1, 'CNY': 1.1}.get(currency, 1.0)
+# Historical note: earlier revisions of this file did a separate FX lookup
+# against exchangerate.host to convert account balances into HKD. We now
+# rely on OpenD's server-side conversion (accinfo_query supports a
+# `currency` argument) so no external FX API is needed for the sync path.
+# The exchange rate stored in each snapshot is the *implied* HKD/native
+# ratio that OpenD returned, not a rate we fetched ourselves.
 
 
 # ─────────────────────────────────────────────
@@ -128,16 +104,15 @@ _MARKET_CURRENCY = {
 
 def _rsa_key_to_tempfile():
     """
-    Materialise the DB-stored RSA private key to a tempfile so the futu SDK
-    can point SysConfig.set_init_rsa_file at it. Returns the file path, or
-    None if no key is configured (caller then errors out with a helpful msg).
+    Materialise the DB-stored RSA private key to a tempfile so the futu
+    SDK can point `SysConfig.set_init_rsa_file` at it.
 
-    The same RSA private key is used for:
-      - encrypted API traffic (SysConfig.enable_proto_encrypt + set_init_rsa_file)
-      - trade unlocking (trd_ctx.unlock_trade)
-    OpenD's side of the pair (public key derived from the same private key)
-    lives in the opend-rsa volume at /rsa/rsa_private.pem. Both sides must
-    use the same key — the admin panel is the canonical source of truth.
+    Futu proto encryption is a **shared private key** scheme, not asymmetric:
+    OpenD (via <rsa_private_key> in FutuOpenD.xml) and every SDK client
+    load the *same* PKCS#1 1024-bit private key. Do not try to feed a
+    public key here — the SDK's `_read_rsa_keys` refuses with "This is
+    not a private key". See docs/opend-setup.md for the underlying
+    handshake spec (documented in Chinese as "要求1024位, 格式为PKCS#1").
     """
     import tempfile
     key = decrypt_rsa_key()
@@ -158,8 +133,8 @@ _SDK_CONFIGURED = False
 
 def _configure_sdk_encryption():
     """
-    One-time setup: enable proto encryption + point SDK at the RSA key
-    stored in the tracker DB. Idempotent — safe to call before every context.
+    One-time setup: enable proto encryption + point SDK at the shared
+    RSA private key.
     """
     global _SDK_CONFIGURED
     if _SDK_CONFIGURED:
@@ -168,10 +143,10 @@ def _configure_sdk_encryption():
     key_path = _rsa_key_to_tempfile()
     if key_path is None:
         raise RuntimeError(
-            "No RSA key configured. Open the tracker admin panel, paste the "
-            "PEM printed by opend on first boot (docker compose logs opend | "
-            "grep -A 30 'NEW RSA KEY') into the 'RSA Key' field, save, and "
-            "retry."
+            "No RSA private key configured. OpenD auto-generates one on "
+            "first boot — run `docker compose logs opend | grep -A20 "
+            "'NEW RSA PRIVATE KEY'` and paste the block into the tracker "
+            "admin panel."
         )
     ft.SysConfig.enable_proto_encrypt(is_encrypt=True)
     ft.SysConfig.set_init_rsa_file(key_path)
@@ -204,10 +179,24 @@ def get_account_balance(host, port, trd_env, acc_id, market):
     """
     Connect to Futu OpenD and fetch a single account's total assets.
 
-    Returns (total_assets: float, currency: str).
+    OpenD's `accinfo_query` accepts a `currency` argument and returns
+    `total_assets` already converted to that currency using Futu's own
+    daily mid-rate — so we ask for HKD directly and avoid a separate FX
+    lookup. We also grab the native-currency figure for display purposes
+    (so the account row can still show "AUD 482,264").
+
+    Returns a dict:
+      {
+        'total_hkd': float,      # HKD-denominated total (Futu's rate)
+        'total_native': float,   # same account, in its native currency
+        'native_currency': str,  # e.g. 'AUD'
+        'fx_rate': float,        # implied HKD-per-native rate
+      }
 
     `acc_id` may be empty string, in which case the first account matching
-    `market` for the target SecurityFirm is used.
+    `market` for the target SecurityFirm is used. It also accepts the
+    human-facing card number (what the Futu app shows) — see the matching
+    block below.
     """
     import futu as ft
 
@@ -229,22 +218,33 @@ def get_account_balance(host, port, trd_env, acc_id, market):
         if ret != ft.RET_OK:
             raise Exception(f"get_acc_list failed: {acc_list}")
 
-        # Client-side account matching. `trdmarket_auth` is a comma/list
-        # field on newer SDKs — normalize to a string search.
-        def _row_matches_market(row):
-            auth = str(row.get('trdmarket_auth', '') or '')
-            return market in auth.upper()
-
         target_acc = None
         if acc_id:
+            # Users typically enter their Futu account card number (e.g.
+            # "1001295093909611") — the same one shown in the Futu app.
+            # The SDK's `acc_id` is a distinct 18-digit internal ID
+            # (e.g. "281756481028617187"), while `card_num` / `uni_card_num`
+            # hold the human-facing card number. Match against any of them
+            # so either form works.
+            wanted = str(acc_id).strip()
             for _, row in acc_list.iterrows():
-                if str(row['acc_id']) == str(acc_id):
+                candidates = {
+                    str(row.get('acc_id', '') or '').strip(),
+                    str(row.get('uni_card_num', '') or '').strip(),
+                    str(row.get('card_num', '') or '').strip(),
+                }
+                if wanted in candidates:
                     target_acc = row
                     break
         else:
-            # First account whose trdmarket_auth includes the target market
+            # First REAL account whose trdmarket_auth includes the target market
             for _, row in acc_list.iterrows():
-                if _row_matches_market(row):
+                if str(row.get('trd_env', '')) != 'REAL':
+                    continue
+                if str(row.get('acc_status', '')) != 'ACTIVE':
+                    continue
+                auth = str(row.get('trdmarket_auth', '') or '').upper()
+                if market in auth:
                     target_acc = row
                     break
             # Fallback: first account of any market (single-market users)
@@ -262,30 +262,46 @@ def get_account_balance(host, port, trd_env, acc_id, market):
         acc_id_int = int(target_acc['acc_id'])
         env = ft.TrdEnv.REAL if trd_env == 'REAL' else ft.TrdEnv.SIMULATE
 
-        # Ask for balance in the account's native currency — cleaner than
-        # letting the SDK auto-pick. Default to HKD if unmapped.
-        native_ccy_name = _MARKET_CURRENCY.get(market, 'HKD')
-        currency_enum = getattr(ft.Currency, native_ccy_name, None)
-
-        query_kwargs = dict(trd_env=env, acc_id=acc_id_int)
-        if currency_enum is not None:
-            query_kwargs['currency'] = currency_enum
-
-        ret, funds = trd_ctx.accinfo_query(**query_kwargs)
+        # Query 1 — total assets in HKD. Futu applies its own daily FX rate
+        # server-side so we skip any external exchangerate.host lookup.
+        hkd_enum = getattr(ft.Currency, 'HKD', None)
+        kwargs_hkd = dict(trd_env=env, acc_id=acc_id_int)
+        if hkd_enum is not None:
+            kwargs_hkd['currency'] = hkd_enum
+        ret, funds_hkd = trd_ctx.accinfo_query(**kwargs_hkd)
         if ret != ft.RET_OK:
-            raise Exception(f"accinfo_query failed: {funds}")
+            raise Exception(f"accinfo_query(HKD) failed: {funds_hkd}")
+        total_hkd = float(funds_hkd['total_assets'].iloc[0])
 
-        total_assets = float(funds['total_assets'].iloc[0])
+        # Query 2 — same account in its native currency (for display).
+        # Some sub-accounts refuse foreign currency conversion (e.g. HK-only
+        # cash accounts return "该账户不支持换算此币种"). Fall back to the
+        # HKD figure with a 1.0 fx_rate when that happens.
+        native_ccy_name = _MARKET_CURRENCY.get(market, 'HKD')
+        total_native = total_hkd
+        native_currency = 'HKD'
+        fx_rate = 1.0
 
-        # Currency: prefer response field, fall back to market default.
-        if 'currency' in funds.columns:
-            currency = str(funds['currency'].iloc[0])
-        else:
-            currency = ''
-        if currency in ('nan', '', 'None'):
-            currency = native_ccy_name
+        if native_ccy_name != 'HKD':
+            native_enum = getattr(ft.Currency, native_ccy_name, None)
+            if native_enum is not None:
+                kwargs_native = dict(trd_env=env, acc_id=acc_id_int, currency=native_enum)
+                ret, funds_native = trd_ctx.accinfo_query(**kwargs_native)
+                if ret == ft.RET_OK:
+                    total_native = float(funds_native['total_assets'].iloc[0])
+                    reported_ccy = str(funds_native['currency'].iloc[0]) \
+                        if 'currency' in funds_native.columns else ''
+                    native_currency = reported_ccy if reported_ccy not in ('', 'nan', 'None') \
+                        else native_ccy_name
+                    if total_native > 0:
+                        fx_rate = total_hkd / total_native
 
-        return total_assets, currency
+        return {
+            'total_hkd': total_hkd,
+            'total_native': total_native,
+            'native_currency': native_currency,
+            'fx_rate': fx_rate,
+        }
 
     finally:
         trd_ctx.close()
@@ -330,29 +346,34 @@ def sync_all_accounts(target_date=None):
 
     for acct in accounts:
         try:
-            total_assets, currency = get_account_balance(
+            bal = get_account_balance(
                 host, port,
                 acct.get('trd_env', 'REAL'),
                 acct.get('acc_id', ''),
                 acct['market']
             )
-            rate = get_exchange_rate_to_hkd(currency, target_date)
-            assets_hkd = total_assets * rate
+            assets_hkd = bal['total_hkd']
+            total_native = bal['total_native']
+            currency = bal['native_currency']
+            rate = bal['fx_rate']
             total_hkd += assets_hkd
 
-            # Save snapshot
+            # Save snapshot — `total_assets` is in the account's native
+            # currency, `total_assets_hkd` is what Futu itself reports for
+            # HKD conversion, `exchange_rate` is the implied HKD-per-native
+            # rate (useful for a "how did today's FX move?" column).
             with get_db() as conn:
                 conn.execute("""
                     INSERT OR REPLACE INTO account_snapshots
-                    (date, account_name, market, currency, total_assets, exchange_rate_to_hkd, total_assets_hkd)
+                    (date, account_name, market, currency, total_assets, exchange_rate, total_assets_hkd)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (target_date, acct['name'], acct['market'], currency,
-                      total_assets, rate, assets_hkd))
+                      total_native, rate, assets_hkd))
 
             results.append({
                 'account': acct['name'],
                 'market': acct['market'],
-                'total_assets': total_assets,
+                'total_assets': total_native,
                 'currency': currency,
                 'rate': rate,
                 'total_hkd': assets_hkd,

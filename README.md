@@ -87,7 +87,7 @@ docker exec futu-opend bash -c 'printf "input_phone_verify_code -code=你的6位
 | 功能 | 说明 |
 |------|------|
 | 多账户汇总 | Futu HK (HKD) + Moomoo US (USD) + Moomoo AU (AUD) |
-| 汇率折算 | 自动获取当日中间价，折算为 HKD |
+| 汇率折算 | OpenD 服务端按 Futu 中间价直接返回 HKD 计价总资产（无外部 FX API） |
 | 净值计算 | 总资产 ÷ 初始金额 = 净值，显示盈亏比例和金额 |
 | 净值曲线 | Chart.js 绘制，涨绿跌红 |
 | 时间切换 | 近3月/6月/12月/今年以来/成立以来 |

@@ -146,21 +146,38 @@ fi
 # RSA key lives in its own volume so it survives OpenD upgrades (which
 # clear /data). SDK requires it because we listen on 0.0.0.0 for the
 # cross-container docker bridge network.
+#
+# Format note: Futu SDK's `SysConfig.set_init_rsa_file` requires a **1024-bit
+# PKCS#1** private key ("-----BEGIN RSA PRIVATE KEY-----"). Both sides
+# (OpenD + our client) load the *same* private key file — Futu's proto
+# encryption is a shared-secret style handshake, not a public/private
+# asymmetric setup. Do NOT try to hand the SDK the public half.
 mkdir -p /rsa
 if [ ! -f /rsa/rsa_private.pem ]; then
-    log "generating RSA keypair (first boot)..."
-    openssl genrsa -out /rsa/rsa_private.pem 2048 2>/dev/null
-    openssl rsa -in /rsa/rsa_private.pem -pubout -out /rsa/rsa_public.pem 2>/dev/null
-    # World-readable so consumers in other containers with non-root uid
-    # can also read it if we ever mount it into the tracker.
-    chmod 644 /rsa/rsa_private.pem /rsa/rsa_public.pem
+    log "generating RSA private key (first boot)..."
+    # 1024-bit — the SDK's Cipher_pkcs1 layer reads/writes in 128-byte
+    # blocks and OpenD's C++ side has the same assumption. Using 2048
+    # produces "Ciphertext with incorrect length (not 256 bytes)" on
+    # the SDK side and heap corruption on the OpenD side.
+    openssl genrsa -traditional -out /rsa/rsa_private.pem 1024 2>/dev/null \
+        || openssl genrsa -out /rsa/rsa_private.pem 1024 2>/dev/null
+    # Ensure PKCS#1 ("BEGIN RSA PRIVATE KEY") — some openssl builds emit
+    # PKCS#8 ("BEGIN PRIVATE KEY") by default, which the SDK rejects with
+    # "This is not a private key".
+    if ! head -1 /rsa/rsa_private.pem | grep -q 'BEGIN RSA PRIVATE KEY'; then
+        openssl rsa -in /rsa/rsa_private.pem -traditional \
+                    -out /rsa/rsa_private.pem.pkcs1 2>/dev/null
+        mv /rsa/rsa_private.pem.pkcs1 /rsa/rsa_private.pem
+    fi
+    chmod 644 /rsa/rsa_private.pem
 
     log "════════════════════════════════════════════════════════════════"
-    log "NEW RSA KEY GENERATED"
+    log "NEW RSA PRIVATE KEY GENERATED"
     log ""
-    log "  Copy the PRIVATE key below and paste it into the tracker admin"
-    log "  panel (Admin -> RSA Key field). Both sides must use the same"
-    log "  key to talk to each other."
+    log "  Futu proto encryption uses a SHARED private key — OpenD and"
+    log "  every SDK client must load the *same* PKCS#1 key. Copy the"
+    log "  block below and paste it into the tracker admin panel"
+    log "  (Admin -> RSA Key field)."
     log ""
     log "  Location inside opend container: /rsa/rsa_private.pem"
     log "════════════════════════════════════════════════════════════════"
@@ -246,6 +263,33 @@ else
 fi
 
 # ───── Stage 3: production CLI ──────────────────────────────────────────
+
+# CLI writes session state (Device.dat, auth tokens, IP lists) to
+# /root/.com.futunn.FutuOpenD/ which lives on the container's ephemeral
+# layer — destroyed on recreate. Symlink it into the /data volume so
+# login state survives container rebuilds.
+CLI_STATE="$DATA/.cli_state"
+mkdir -p "$CLI_STATE"
+if [ -L /root/.com.futunn.FutuOpenD ]; then
+    : # already a symlink, nothing to do
+elif [ -d /root/.com.futunn.FutuOpenD ]; then
+    # First run after upgrade: merge any existing data, then replace with symlink
+    cp -a /root/.com.futunn.FutuOpenD/* "$CLI_STATE/" 2>/dev/null || true
+    rm -rf /root/.com.futunn.FutuOpenD
+    ln -s "$CLI_STATE" /root/.com.futunn.FutuOpenD
+else
+    ln -s "$CLI_STATE" /root/.com.futunn.FutuOpenD
+fi
+log "CLI state dir: $CLI_STATE -> /root/.com.futunn.FutuOpenD"
+
+# Seed CLI's Device.dat from GUI's fingerprint if CLI hasn't logged in yet
+GUI_DEVICE="$DATA/.com.futunn.FutuOpenD/F3CNN/Device.dat"
+CLI_DEVICE="$CLI_STATE/F3CNN/Device.dat"
+if [ -f "$GUI_DEVICE" ] && [ ! -f "$CLI_DEVICE" ]; then
+    mkdir -p "$CLI_STATE/F3CNN"
+    cp "$GUI_DEVICE" "$CLI_DEVICE"
+    log "seeded CLI Device.dat from GUI fingerprint"
+fi
 
 cd "$DATA"
 log "starting headless CLI FutuOpenD on port 11111"

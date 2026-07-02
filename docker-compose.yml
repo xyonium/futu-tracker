@@ -20,9 +20,11 @@ services:
     volumes:
       - opend-data:/data
       - opend-config:/config
-      # RSA private key for encrypted API traffic. Auto-generated on first
-      # boot; you copy the pem out of `docker logs opend` and paste it into
-      # the tracker admin panel so both sides use the same key.
+      # Shared RSA private key for encrypted API traffic. Futu proto
+      # encryption is a shared-secret style scheme (both OpenD and every
+      # SDK client load the same PKCS#1 1024-bit key), not asymmetric.
+      # Auto-generated on first boot; copy the key block out of
+      # `docker logs opend` and paste it into the tracker admin panel.
       - opend-rsa:/rsa
     ports:
       # Bootstrap-only. Once the fingerprint is captured, the entrypoint

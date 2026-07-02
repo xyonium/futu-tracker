@@ -91,7 +91,44 @@ docker exec futu-opend bash -c \
 
 ✅ 验证通过后 OpenD 会绑定设备指纹，**以后所有重启都不再需要验证码**。
 
-### 5. 配置 tracker 连 OpenD
+### 5. 复制 RSA 密钥到 tracker（每卷仅一次）
+
+因为 OpenD 监听 `0.0.0.0`（跨容器网络），SDK 会拒绝明文连接，
+两侧都要装同一份 **PKCS#1 1024-bit 私钥**做协议加密（Futu 的加密握手
+是**共享私钥**，不是公私钥非对称，容易被误解 —— 参考 SDK 文档
+`SysConfig.set_init_rsa_file`：*"设置RSA私钥文件, 要求1024位, 格式为PKCS#1"*）。
+
+第一次启动 opend 容器时 entrypoint 自动生成这份密钥并打印到日志：
+
+```
+[opend] ════════════════════════════════════════════════════════════════
+[opend] NEW RSA PRIVATE KEY GENERATED
+[opend]
+[opend]   Futu proto encryption uses a SHARED private key — OpenD and
+[opend]   every SDK client must load the *same* PKCS#1 key. Copy the
+[opend]   block below and paste it into the tracker admin panel
+[opend]   (Admin -> RSA Key field).
+[opend]
+[opend]   Location inside opend container: /rsa/rsa_private.pem
+[opend] ════════════════════════════════════════════════════════════════
+[opend]   -----BEGIN RSA PRIVATE KEY-----
+[opend]   MIICWwIBAAKBgQD...
+[opend]   ...
+[opend]   -----END RSA PRIVATE KEY-----
+[opend] ════════════════════════════════════════════════════════════════
+```
+
+如果你错过了日志（例如已经滚过去了），随时可以再拉出来：
+
+```bash
+docker compose exec opend cat /rsa/rsa_private.pem
+```
+
+复制整段 `-----BEGIN RSA PRIVATE KEY----- … -----END RSA PRIVATE KEY-----`
+（含首尾行），粘贴到 tracker 管理后台的 **RSA Key** 字段并保存。密钥在
+DB 里再用 Fernet 加密一次（`data/.encryption_key`），不会明文落盘。
+
+### 6. 配置 tracker 连 OpenD
 
 打开 `http://<你的服务器 IP>:5000`，用 `admin` / `admin123` 登录 →
 管理后台 → OpenD 配置：
@@ -203,6 +240,35 @@ docker exec futu-opend bash -c \
 docker compose exec tracker nc -zv opend 11111
 ```
 若不通，检查 `futu_host` 配置项在管理后台里的值是不是 `opend`（而不是 `127.0.0.1`）。
+
+**tracker 侧 "Ciphertext with incorrect length (not 256 bytes)"**
+SDK 拿到的 RSA 密钥不是 1024 位。历史遗留 2048 位密钥会触发这个错误，
+同时也是 OpenD 侧 `double free / malloc_consolidate` 反复 crash 的
+诱因。重新生成 1024 位密钥并粘贴到管理后台：
+```bash
+docker compose exec opend rm /rsa/rsa_private.pem
+docker compose restart opend
+docker compose logs opend | grep -A20 "NEW RSA PRIVATE KEY"
+```
+
+**tracker 侧 "This is not a private key"**
+DB 里存的是**公钥**或 PKCS#8 格式（`-----BEGIN PRIVATE KEY-----`）。
+Futu SDK 要求 PKCS#1（`-----BEGIN RSA PRIVATE KEY-----`）。用容器里
+的 openssl 转一下：
+```bash
+docker compose exec opend openssl rsa -in /rsa/rsa_private.pem \
+    -traditional -out /rsa/rsa_private.pem
+docker compose exec opend cat /rsa/rsa_private.pem
+```
+再把这份 PKCS#1 私钥粘贴到管理后台覆盖之前的。
+
+**tracker 侧 "No account found for market=..."**
+管理后台里填的 acc_id 与 SDK 返回的字段对不上。用户视角的账户号
+（例如 `1001295093909611`，就是富途 App 里显示的那个）实际上是
+`card_num` / `uni_card_num`，SDK 内部的 `acc_id` 是另一个 18 位 ID
+（例如 `281756480817712036`）。tracker 会自动尝试匹配三个字段，
+但如果账户被 `DISABLED` 或状态不是 `ACTIVE` 就会跳过 —— 检查富途 App
+里该子账户是否已开通。
 
 ## 内存参考
 

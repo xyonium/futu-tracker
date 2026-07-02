@@ -88,6 +88,7 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT NOT NULL,
                 account_name TEXT NOT NULL,
+                market TEXT NOT NULL DEFAULT '',
                 currency TEXT NOT NULL,
                 total_assets REAL NOT NULL,
                 total_assets_hkd REAL NOT NULL,
