@@ -20,10 +20,12 @@ cp .env.example .env
 
 ```ini
 FUTU_LOGIN_ACCOUNT=<你的富途/moomoo ID、手机号或邮箱>
-FLASK_SECRET_KEY=$(openssl rand -hex 32)   # 生成一次填进去
+FUTU_LOGIN_PWD_MD5=<密码的 32 位 MD5>    # 生成: echo -n '你的密码' | md5sum
+FLASK_SECRET_KEY=$(openssl rand -hex 32)
 ```
 
-其余保持默认即可。
+`FUTU_LOGIN_PWD_MD5` 是**必须的** —— CLI 进程不共享 VNC GUI 的内存登录态，
+每次 CLI 启动都需要用密码 MD5 重新认证。
 
 ### 2. 启动
 
@@ -60,14 +62,36 @@ docker compose logs -f opend
 ```
 [opend] fingerprint acquired — recording paths for future startups
 [opend] checkpoint files:
-[opend]   /data/userdata/SnFingerPrint.dat
+[opend]   /data/.com.futunn.FutuOpenD/F3CNN/Device.dat
 [opend] shutting down VNC layer to reclaim memory...
 [opend] starting headless CLI FutuOpenD on port 11111
 ```
 
 **此时 6080 端口不再响应，OpenD 只在 Docker 内网监听 11111。**
 
-### 4. 配置 tracker 连 OpenD
+### 4. CLI 首次验证码（只需一次）
+
+CLI 进程首次连接富途服务器时，**同样需要一次手机验证码**来建立 CLI 进程的
+设备信任。这是 CLI 独立于 GUI 的安全要求，只在**这第一次**发生。
+
+日志中会看到：
+
+```
+>>> 命令提示: input_phone_verify_code -code=123456
+>>> 正在请求手机验证码
+>>> 请求手机验证码成功
+```
+
+收到短信后，用容器内置的 `nc` 通过 telnet 控制台发送验证码：
+
+```bash
+docker exec futu-opend bash -c \
+  'printf "input_phone_verify_code -code=你的6位验证码\r\n" | nc -w 5 localhost 22222'
+```
+
+✅ 验证通过后 OpenD 会绑定设备指纹，**以后所有重启都不再需要验证码**。
+
+### 5. 配置 tracker 连 OpenD
 
 打开 `http://<你的服务器 IP>:5000`，用 `admin` / `admin123` 登录 →
 管理后台 → OpenD 配置：
@@ -105,9 +129,9 @@ docker compose logs -f opend
 
 ### 强制重新登录（例如指纹坏了、想换账号）
 
-```bash
+  ```bash
 docker compose exec opend rm -f /data/.fingerprint_paths
-docker compose exec opend sh -c 'find /data/userdata -name "SnFinger*" -delete'
+docker compose exec opend sh -c 'find /data/.com.futunn.FutuOpenD -name "Device.dat" -delete'
 docker compose restart opend
 docker compose logs -f opend    # 会再次触发 VNC bootstrap
 ```
@@ -164,6 +188,14 @@ docker compose exec opend cat /tmp/x11vnc.log
 docker compose logs opend | tail -50
 ```
 升级 `OPEND_VERSION`。
+
+**nc 发验证码后没反应**
+确认 `\r\n` 换行符是否丢了（telnet 协议需要 CRLF）：
+```bash
+docker exec futu-opend bash -c \
+  'printf "input_phone_verify_code -code=123456\r\n" | nc -w 5 localhost 22222'
+```
+注意是 `printf` 不是 `echo`，`\r\n` 必须带反斜杠。
 
 **tracker 侧 "get_acc_list failed"**
 检查 tracker 是否能连到 opend：

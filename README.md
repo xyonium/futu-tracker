@@ -42,20 +42,35 @@ python app.py
 
 ### 方式二：Docker（推荐 — 含 OpenD 网关自动部署）
 
-一条命令拉起 Flask 站点 + Futu OpenD 网关。OpenD 首次登录需要手机验证码，
-容器会临时启动一个网页 VNC 让你在浏览器里完成登录，之后自动切成 headless 模式。
+一条命令拉起 Flask 站点 + Futu OpenD 网关。
 
+**首次部署需三次操作（约 5 分钟）：**
+
+**1) 准备 `.env`**
 ```bash
 cp .env.example .env
-# 编辑 .env，至少填 FUTU_LOGIN_ACCOUNT
-docker compose up -d
-docker compose logs -f opend    # 观察引导过程
+# 编辑 .env，填：
+#   FUTU_LOGIN_ACCOUNT=<你的富途 ID>
+#   FUTU_LOGIN_PWD_MD5=<密码 MD5>  （生成: echo -n '密码' | md5sum）
 ```
 
-首次启动时日志里会打印一个 VNC 密码和访问地址 `http://<server>:6080/vnc.html`。
-在浏览器里登录 OpenD、输手机验证码后，容器会自动关掉 VNC 层、启动 headless CLI。
+**2) VNC 网页登录（拿到设备指纹）**
+```bash
+docker compose up -d
+docker compose logs -f opend
+# 看到 VNC 密码后，浏览器打开 http://<server>:6080/vnc.html
+# 输入富途账号密码 + 手机验证码，让 OpenD 记住此设备
+# 容器检测到指纹文件后会自动关掉 VNC、启动 headless CLI
+```
 
-详细说明见 [docs/opend-setup.md](docs/opend-setup.md)。
+**3) CLI 首次验证码（只需一次）**
+```bash
+# CLI 启动后会在 log 里提示: 命令提示: input_phone_verify_code -code=123456
+# 收到手机短信后：
+docker exec futu-opend bash -c 'printf "input_phone_verify_code -code=你的6位码\r\n" | nc -w 5 localhost 22222'
+```
+
+之后所有重启都不再需要验证码。详细说明见 [docs/opend-setup.md](docs/opend-setup.md)。
 
 ## ⚙️ 配置步骤
 
