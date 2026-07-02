@@ -55,7 +55,10 @@
             </div>
         </div>
 
-        <!-- Account Breakdown -->
+        <!-- Account Breakdown (admin only — hides raw HKD/native amounts
+             from regular users, who only get to see their own rebased
+             totals in the summary cards above) -->
+        {% if is_admin %}
         <div class="card">
             <h3>账户明细 <span id="detailDate" class="text-muted"></span></h3>
             <div class="table-responsive">
@@ -75,6 +78,7 @@
                 </table>
             </div>
         </div>
+        {% endif %}
     </main>
 
     <script src="/static/js/dashboard.js"></script>

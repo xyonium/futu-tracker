@@ -77,6 +77,13 @@ def init_db():
                 username TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
                 is_admin INTEGER DEFAULT 0,
+                -- Per-user "how much did I actually invest" anchor. Non-admin
+                -- users see total_assets_hkd and pnl_amount rebased against
+                -- this value (their share of the pool), while the global
+                -- initial_capital in `config` continues to drive the nav
+                -- curve. NULL means "not set" — the user's numeric display
+                -- degrades to '--' until an admin fills it in.
+                personal_initial_capital REAL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS config (
@@ -105,6 +112,18 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
+        # Backfill column on pre-existing databases. CREATE TABLE IF NOT
+        # EXISTS above is a no-op when the table already exists, so we
+        # ALTER TABLE separately. SQLite has no "ADD COLUMN IF NOT EXISTS"
+        # — probe pragma_table_info instead.
+        cols = [r['name'] for r in conn.execute(
+            "SELECT name FROM pragma_table_info('users')"
+        ).fetchall()]
+        if 'personal_initial_capital' not in cols:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN personal_initial_capital REAL"
+            )
+
         # Create default admin if not exists
         admin = conn.execute("SELECT id FROM users WHERE username='admin'").fetchone()
         if not admin:
@@ -118,11 +137,19 @@ def init_db():
 # ─────────────────────────────────────────────
 # Auth decorators
 # ─────────────────────────────────────────────
+def _wants_json():
+    """True if the current request is an API call rather than a browser
+    navigation. `request.is_json` only catches requests with a JSON
+    *body*, missing GETs that expect JSON back. Paths under /api/ are
+    always API endpoints, so we treat them as JSON regardless."""
+    return request.is_json or request.path.startswith('/api/')
+
+
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         if 'user_id' not in session:
-            if request.is_json:
+            if _wants_json():
                 return jsonify({'error': 'Unauthorized'}), 401
             return redirect(url_for('login'))
         return f(*args, **kwargs)
@@ -133,11 +160,11 @@ def admin_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         if 'user_id' not in session:
-            if request.is_json:
+            if _wants_json():
                 return jsonify({'error': 'Unauthorized'}), 401
             return redirect(url_for('login'))
         if not session.get('is_admin'):
-            if request.is_json:
+            if _wants_json():
                 return jsonify({'error': 'Forbidden'}), 403
             flash('Admin access required', 'error')
             return redirect(url_for('dashboard'))
@@ -280,7 +307,20 @@ def api_account_detail():
 @app.route('/api/summary')
 @login_required
 def api_summary():
-    """Current portfolio summary."""
+    """Current portfolio summary.
+
+    Admins see the raw pool figures (initial_capital from config,
+    total_assets_hkd summed across all accounts).
+
+    Non-admins see the same *ratio* (nav, pnl_pct — the pool is one
+    portfolio so its returns are a property of the pool, not the user)
+    but total_assets_hkd and pnl_amount are rebased against their
+    personal_initial_capital: what a personal_initial of X would be
+    worth today given the pool's current nav.
+
+    If personal_initial_capital is NULL, we return the amount fields as
+    None so the dashboard renders '--' rather than a misleading zero.
+    """
     with get_db() as conn:
         latest = conn.execute(
             "SELECT * FROM daily_nav ORDER BY date DESC LIMIT 1"
@@ -288,15 +328,39 @@ def api_summary():
     if not latest:
         return jsonify({'has_data': False})
 
-    initial_capital = float(get_config('initial_capital', '1000000'))
+    is_admin = bool(session.get('is_admin'))
+    nav = latest['nav']
+    pnl_pct = latest['pnl_pct']
+
+    if is_admin:
+        initial_capital = float(get_config('initial_capital', '1000000'))
+        total_assets_hkd = latest['total_assets_hkd']
+        pnl_amount = total_assets_hkd - initial_capital
+    else:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT personal_initial_capital FROM users WHERE id=?",
+                (session.get('user_id'),)
+            ).fetchone()
+        personal = row['personal_initial_capital'] if row else None
+        if personal is None:
+            initial_capital = None
+            total_assets_hkd = None
+            pnl_amount = None
+        else:
+            initial_capital = float(personal)
+            total_assets_hkd = initial_capital * nav
+            pnl_amount = total_assets_hkd - initial_capital
+
     return jsonify({
         'has_data': True,
         'date': latest['date'],
-        'total_assets_hkd': latest['total_assets_hkd'],
-        'nav': latest['nav'],
-        'pnl_pct': latest['pnl_pct'],
+        'total_assets_hkd': total_assets_hkd,
+        'nav': nav,
+        'pnl_pct': pnl_pct,
         'initial_capital': initial_capital,
-        'pnl_amount': latest['total_assets_hkd'] - initial_capital
+        'pnl_amount': pnl_amount,
+        'is_admin': is_admin,
     })
 
 
@@ -387,7 +451,8 @@ def api_admin_users():
     if request.method == 'GET':
         with get_db() as conn:
             users = conn.execute(
-                "SELECT id, username, is_admin, created_at FROM users"
+                "SELECT id, username, is_admin, personal_initial_capital, "
+                "created_at FROM users"
             ).fetchall()
         return jsonify([dict(u) for u in users])
 
@@ -396,13 +461,22 @@ def api_admin_users():
         username = data.get('username', '').strip()
         password = data.get('password', '')
         is_admin = data.get('is_admin', False)
+        # Optional per-user anchor. Admins don't need one (they see the
+        # pool figure); regular users see '--' until this is set.
+        raw_cap = data.get('personal_initial_capital', None)
+        try:
+            personal_cap = float(raw_cap) if raw_cap not in (None, '', 0) else None
+        except (TypeError, ValueError):
+            personal_cap = None
         if not username or not password:
             return jsonify({'error': 'Username and password required'}), 400
         try:
             with get_db() as conn:
                 conn.execute(
-                    "INSERT INTO users (username, password_hash, is_admin) VALUES (?,?,?)",
-                    (username, generate_password_hash(password), int(is_admin))
+                    "INSERT INTO users (username, password_hash, is_admin, "
+                    "personal_initial_capital) VALUES (?,?,?,?)",
+                    (username, generate_password_hash(password),
+                     int(is_admin), personal_cap)
                 )
             return jsonify({'ok': True})
         except sqlite3.IntegrityError:
@@ -416,6 +490,32 @@ def api_admin_users():
         with get_db() as conn:
             conn.execute("DELETE FROM users WHERE id=?", (user_id,))
         return jsonify({'ok': True})
+
+
+@app.route('/api/admin/user_capital', methods=['POST'])
+@admin_required
+def api_admin_user_capital():
+    """Update a single user's personal_initial_capital.
+
+    Pass `null` (or an empty string) to clear it — the user's dashboard
+    will fall back to '--' for the amount fields. Only affects that
+    user's numeric display; nothing in daily_nav or config is touched.
+    """
+    data = request.get_json()
+    user_id = data.get('user_id')
+    raw = data.get('personal_initial_capital', None)
+    if user_id is None:
+        return jsonify({'error': 'user_id required'}), 400
+    try:
+        capital = float(raw) if raw not in (None, '', 0) else None
+    except (TypeError, ValueError):
+        return jsonify({'error': 'invalid amount'}), 400
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE users SET personal_initial_capital=? WHERE id=?",
+            (capital, user_id)
+        )
+    return jsonify({'ok': True})
 
 
 @app.route('/api/admin/change_password', methods=['POST'])

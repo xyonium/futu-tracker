@@ -5,7 +5,11 @@ let currentPeriod = 'all';
 document.addEventListener('DOMContentLoaded', () => {
     loadSummary();
     loadChart('all');
-    loadAccountDetail();
+    // Account breakdown table is admin-only; the template omits its DOM
+    // for non-admin users so we skip the fetch entirely there.
+    if (document.getElementById('accountBody')) {
+        loadAccountDetail();
+    }
 
     document.querySelectorAll('.period-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -50,8 +54,15 @@ async function loadSummary() {
 
     const amtEl = document.getElementById('pnlAmount');
     const amtVal = data.pnl_amount;
-    amtEl.textContent = (amtVal >= 0 ? '+' : '') + formatNumber(amtVal, 0);
-    amtEl.className = 'card-value ' + (amtVal >= 0 ? 'positive' : 'negative');
+    if (amtVal == null) {
+        // Non-admin user without a personal_initial_capital set — leave
+        // the amount card blank rather than showing a misleading '+0'.
+        amtEl.textContent = '--';
+        amtEl.className = 'card-value';
+    } else {
+        amtEl.textContent = (amtVal >= 0 ? '+' : '') + formatNumber(amtVal, 0);
+        amtEl.className = 'card-value ' + (amtVal >= 0 ? 'positive' : 'negative');
+    }
 }
 
 async function loadChart(period) {

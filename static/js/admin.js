@@ -136,40 +136,70 @@ async function loadUsers() {
     if (!users) return;
 
     const tbody = document.getElementById('userBody');
-    tbody.innerHTML = users.map(u => `
+    tbody.innerHTML = users.map(u => {
+        // Admins don't get an editable capital field — the amount they
+        // see on the dashboard is the pool's initial_capital from
+        // config, not a per-user override.
+        const capCell = u.is_admin
+            ? '<span class="text-muted">—</span>'
+            : `<input type="number" step="0.01" class="cap-input" id="cap_${u.id}"
+                     value="${u.personal_initial_capital ?? ''}"
+                     placeholder="未设置" style="width:150px">
+               <button class="btn btn-outline btn-xs"
+                       onclick="saveCapital(${u.id}, '${u.username}')">保存</button>`;
+        return `
         <tr>
             <td>${u.username}</td>
             <td>${u.is_admin ? '管理员' : '普通用户'}</td>
+            <td>${capCell}</td>
             <td>${u.created_at || '--'}</td>
             <td>
                 <button class="btn btn-outline btn-xs" onclick="changePassword(${u.id}, '${u.username}')">改密</button>
                 <button class="btn btn-danger btn-xs" onclick="deleteUser(${u.id}, '${u.username}')">删除</button>
             </td>
-        </tr>
-    `).join('');
+        </tr>`;
+    }).join('');
 }
 
 async function addUser() {
     const username = document.getElementById('newUsername').value.trim();
     const password = document.getElementById('newPassword').value;
     const isAdmin = document.getElementById('newIsAdmin').checked;
+    const capRaw = document.getElementById('newInitialCapital').value.trim();
+    const personalCap = capRaw === '' ? null : parseFloat(capRaw);
 
     if (!username || !password) { alert('请填写用户名和密码'); return; }
 
     const result = await apiFetch('/api/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password, is_admin: isAdmin })
+        body: JSON.stringify({
+            username, password, is_admin: isAdmin,
+            personal_initial_capital: personalCap,
+        })
     });
 
     if (result && result.ok) {
         document.getElementById('newUsername').value = '';
         document.getElementById('newPassword').value = '';
+        document.getElementById('newInitialCapital').value = '';
         document.getElementById('newIsAdmin').checked = false;
         loadUsers();
     } else {
         alert(result ? result.error : '添加失败');
     }
+}
+
+async function saveCapital(id, username) {
+    const raw = document.getElementById(`cap_${id}`).value.trim();
+    const value = raw === '' ? null : parseFloat(raw);
+    const result = await apiFetch('/api/admin/user_capital', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: id, personal_initial_capital: value })
+    });
+    if (result && result.ok) alert(`${username} 的初始资产已保存`);
+    else alert(result ? result.error : '保存失败');
 }
 
 async function deleteUser(id, username) {
