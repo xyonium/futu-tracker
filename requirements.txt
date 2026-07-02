@@ -1,6 +1,7 @@
 flask>=3.0
 werkzeug>=3.0
 cryptography>=41.0
-futu-api>=9.0
+# Skill pack (openapi.futunn.com/futu-api-doc/intro/ai.html) requires >= 10.4.6408
+futu-api>=10.4.6408
 requests>=2.31
 gunicorn>=21.2

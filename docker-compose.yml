@@ -1,19 +1,56 @@
-version: "3.8"
 services:
-  web:
+  opend:
+    build: ./opend
+    container_name: futu-opend
+    restart: unless-stopped
+    environment:
+      # Required — your Futu / moomoo user ID (or phone / email).
+      # Password is entered in the VNC bootstrap browser on first launch,
+      # never stored in config.
+      - FUTU_LOGIN_ACCOUNT=${FUTU_LOGIN_ACCOUNT:?FUTU_LOGIN_ACCOUNT must be set in .env}
+      - OPEND_VERSION=${OPEND_VERSION:-10.8.6808}
+      - FUTU_LANG=${FUTU_LANG:-chs}
+      - FUTU_LOG_LEVEL=${FUTU_LOG_LEVEL:-info}
+      # Optional — if unset, a random 20-char password is generated once
+      # and persisted to the opend-data volume. Read it from `docker logs opend`.
+      - VNC_PASSWORD=${VNC_PASSWORD:-}
+    volumes:
+      - opend-data:/data
+      - opend-config:/config
+    ports:
+      # Bootstrap-only. Once the fingerprint is captured, the entrypoint
+      # pkills the websockify process and this port stops responding.
+      - "${VNC_BIND:-0.0.0.0}:6080:6080"
+    # 11111 is NOT published — tracker reaches OpenD over the internal
+    # docker network on hostname "opend".
+    expose:
+      - "11111"
+    networks:
+      - futu-net
+
+  tracker:
     build: .
+    container_name: futu-tracker
+    restart: unless-stopped
+    depends_on:
+      - opend
+    environment:
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-please-change-this-secret}
+      # Overrides the futu_host/futu_port DB config on first run so the
+      # tracker points at the sibling opend container automatically.
+      - FUTU_HOST=opend
+      - FUTU_PORT=11111
     ports:
       - "5000:5000"
     volumes:
       - ./data:/app/data
-    environment:
-      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-please-change-this-secret}
-    restart: unless-stopped
+    networks:
+      - futu-net
 
-  # Optional: run OpenD alongside (requires Futu OpenD binary)
-  # opend:
-  #   image: your-opend-image
-  #   ports:
-  #     - "11111:11111"
-  #   volumes:
-  #     - ./opend_config:/root/.futuopend
+volumes:
+  opend-data:
+  opend-config:
+
+networks:
+  futu-net:
+    driver: bridge

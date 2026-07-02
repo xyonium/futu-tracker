@@ -40,12 +40,22 @@ python app.py
 
 访问 http://localhost:5000，默认管理员账号：`admin` / `admin123`
 
-### 方式二：Docker
+### 方式二：Docker（推荐 — 含 OpenD 网关自动部署）
+
+一条命令拉起 Flask 站点 + Futu OpenD 网关。OpenD 首次登录需要手机验证码，
+容器会临时启动一个网页 VNC 让你在浏览器里完成登录，之后自动切成 headless 模式。
 
 ```bash
-cd futu_portfolio
-docker-compose up -d
+cp .env.example .env
+# 编辑 .env，至少填 FUTU_LOGIN_ACCOUNT
+docker compose up -d
+docker compose logs -f opend    # 观察引导过程
 ```
+
+首次启动时日志里会打印一个 VNC 密码和访问地址 `http://<server>:6080/vnc.html`。
+在浏览器里登录 OpenD、输手机验证码后，容器会自动关掉 VNC 层、启动 headless CLI。
+
+详细说明见 [docs/opend-setup.md](docs/opend-setup.md)。
 
 ## ⚙️ 配置步骤
 
