@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libssl3 libcurl4 \
         xvfb x11vnc fluxbox novnc websockify \
         fuse libfuse2 \
-        procps psmisc net-tools \
+        procps psmisc net-tools netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 # Symlink noVNC index for cleaner URL
