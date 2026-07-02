@@ -126,12 +126,65 @@ _MARKET_CURRENCY = {
 }
 
 
+def _rsa_key_to_tempfile():
+    """
+    Materialise the DB-stored RSA private key to a tempfile so the futu SDK
+    can point SysConfig.set_init_rsa_file at it. Returns the file path, or
+    None if no key is configured (caller then errors out with a helpful msg).
+
+    The same RSA private key is used for:
+      - encrypted API traffic (SysConfig.enable_proto_encrypt + set_init_rsa_file)
+      - trade unlocking (trd_ctx.unlock_trade)
+    OpenD's side of the pair (public key derived from the same private key)
+    lives in the opend-rsa volume at /rsa/rsa_private.pem. Both sides must
+    use the same key — the admin panel is the canonical source of truth.
+    """
+    import tempfile
+    key = decrypt_rsa_key()
+    if not key:
+        return None
+    key = key.strip() + "\n"
+    tmp = tempfile.NamedTemporaryFile(
+        mode='w', suffix='.pem', delete=False, dir='/tmp'
+    )
+    tmp.write(key)
+    tmp.close()
+    os.chmod(tmp.name, 0o600)
+    return tmp.name
+
+
+_SDK_CONFIGURED = False
+
+
+def _configure_sdk_encryption():
+    """
+    One-time setup: enable proto encryption + point SDK at the RSA key
+    stored in the tracker DB. Idempotent — safe to call before every context.
+    """
+    global _SDK_CONFIGURED
+    if _SDK_CONFIGURED:
+        return
+    import futu as ft
+    key_path = _rsa_key_to_tempfile()
+    if key_path is None:
+        raise RuntimeError(
+            "No RSA key configured. Open the tracker admin panel, paste the "
+            "PEM printed by opend on first boot (docker compose logs opend | "
+            "grep -A 30 'NEW RSA KEY') into the 'RSA Key' field, save, and "
+            "retry."
+        )
+    ft.SysConfig.enable_proto_encrypt(is_encrypt=True)
+    ft.SysConfig.set_init_rsa_file(key_path)
+    _SDK_CONFIGURED = True
+
+
 def _open_context(host, port, firm_name):
     """
     Open an OpenSecTradeContext for a given SecurityFirm, with the widest
     market filter so client-side account matching sees everything.
     """
     import futu as ft
+    _configure_sdk_encryption()
     firm = getattr(ft.SecurityFirm, firm_name, None)
     if firm is None:
         raise ValueError(

@@ -143,13 +143,31 @@ fi
 
 # ───── Render config ────────────────────────────────────────────────────
 
-# Auto-generate RSA keypair on first boot (needed when OpenD listens on 0.0.0.0
-# — the SDK requires encryption for non-localhost connections).
-if [ ! -f "$DATA/rsa_private.pem" ]; then
-    log "generating RSA keypair..."
-    openssl genrsa -out "$DATA/rsa_private.pem" 2048 2>/dev/null
-    openssl rsa -in "$DATA/rsa_private.pem" -pubout -out "$DATA/rsa_public.pem" 2>/dev/null
-    chmod 600 "$DATA/rsa_private.pem"
+# RSA key lives in its own volume so it survives OpenD upgrades (which
+# clear /data). SDK requires it because we listen on 0.0.0.0 for the
+# cross-container docker bridge network.
+mkdir -p /rsa
+if [ ! -f /rsa/rsa_private.pem ]; then
+    log "generating RSA keypair (first boot)..."
+    openssl genrsa -out /rsa/rsa_private.pem 2048 2>/dev/null
+    openssl rsa -in /rsa/rsa_private.pem -pubout -out /rsa/rsa_public.pem 2>/dev/null
+    # World-readable so consumers in other containers with non-root uid
+    # can also read it if we ever mount it into the tracker.
+    chmod 644 /rsa/rsa_private.pem /rsa/rsa_public.pem
+
+    log "════════════════════════════════════════════════════════════════"
+    log "NEW RSA KEY GENERATED"
+    log ""
+    log "  Copy the PRIVATE key below and paste it into the tracker admin"
+    log "  panel (Admin -> RSA Key field). Both sides must use the same"
+    log "  key to talk to each other."
+    log ""
+    log "  Location inside opend container: /rsa/rsa_private.pem"
+    log "════════════════════════════════════════════════════════════════"
+    while IFS= read -r line; do
+        log "  $line"
+    done < /rsa/rsa_private.pem
+    log "════════════════════════════════════════════════════════════════"
 fi
 
 /usr/local/bin/render-config.sh > "$CFG"

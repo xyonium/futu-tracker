@@ -4,6 +4,11 @@ data/
 *.sqlite
 *.sqlite3
 
+# OpenD container bind-mount leftovers (should live in named volumes only)
+opend-data/
+opend-config/
+opend-rsa/
+
 # Python
 __pycache__/
 *.py[cod]

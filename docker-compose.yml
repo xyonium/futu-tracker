@@ -2,7 +2,9 @@ services:
   opend:
     build: ./opend
     container_name: futu-opend
-    restart: unless-stopped
+    # Bound retry — 3 crashes = give up. Avoids the "登录次数过多" 45-min
+    # rate limit that unbounded restart-on-crash triggers.
+    restart: on-failure:3
     environment:
       # Required — your Futu / moomoo user ID (or phone / email).
       - FUTU_LOGIN_ACCOUNT=${FUTU_LOGIN_ACCOUNT:?FUTU_LOGIN_ACCOUNT must be set in .env}
@@ -18,6 +20,10 @@ services:
     volumes:
       - opend-data:/data
       - opend-config:/config
+      # RSA private key for encrypted API traffic. Auto-generated on first
+      # boot; you copy the pem out of `docker logs opend` and paste it into
+      # the tracker admin panel so both sides use the same key.
+      - opend-rsa:/rsa
     ports:
       # Bootstrap-only. Once the fingerprint is captured, the entrypoint
       # pkills the websockify process and this port stops responding.
@@ -51,6 +57,7 @@ services:
 volumes:
   opend-data:
   opend-config:
+  opend-rsa:
 
 networks:
   futu-net:
