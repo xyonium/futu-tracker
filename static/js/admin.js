@@ -3,6 +3,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     loadConfig();
     loadUsers();
+    initSnapshotSection();
 });
 
 async function apiFetch(url, opts = {}) {
@@ -223,4 +224,118 @@ async function changePassword(id, username) {
     });
     if (result && result.ok) alert('密码已修改');
     else alert(result ? result.error : '修改失败');
+}
+
+// ─── Manual historical snapshot import ───
+// Rows are keyed by market. HK's rate is locked to 1.0 (it's already
+// HKD). Users type native amounts; the HKD column recomputes live so
+// the admin can eyeball totals before hitting save.
+const SNAP_ROWS = [
+    { market: 'HK', name: 'Futu HK',   currency: 'HKD', rateLocked: true  },
+    { market: 'US', name: 'Moomoo US', currency: 'USD', rateLocked: false },
+    { market: 'AU', name: 'Moomoo AU', currency: 'AUD', rateLocked: false },
+];
+
+function lastWeekdayOfMonth(year, monthZeroBased) {
+    // JS Date: month is 0-based. Day 0 of month M+1 = last day of month M.
+    const d = new Date(year, monthZeroBased + 1, 0);
+    while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+}
+
+function initSnapshotSection() {
+    const now = new Date();
+    // Default snapshot date to last weekday of the *previous* month —
+    // matches the "monthly statement" workflow.
+    const prevMonth = now.getMonth() === 0
+        ? { y: now.getFullYear() - 1, m: 11 }
+        : { y: now.getFullYear(), m: now.getMonth() - 1 };
+    document.getElementById('snapDate').value = lastWeekdayOfMonth(prevMonth.y, prevMonth.m);
+
+    const tbody = document.getElementById('snapBody');
+    tbody.innerHTML = SNAP_ROWS.map(r => `
+        <tr data-market="${r.market}">
+            <td><strong>${r.market}</strong></td>
+            <td><input type="text" class="snap-name"     value="${r.name}"     style="width:120px"></td>
+            <td><input type="text" class="snap-currency" value="${r.currency}" style="width:60px"  ${r.rateLocked ? 'readonly' : ''}></td>
+            <td><input type="number" step="0.01" class="snap-native" value="0" style="width:150px" oninput="recalcSnapTotal()"></td>
+            <td><input type="number" step="0.000001" class="snap-rate"
+                       value="${r.rateLocked ? '1.0' : ''}"
+                       ${r.rateLocked ? 'readonly style="background:#222;color:#888;"' : ''}
+                       style="width:110px" oninput="recalcSnapTotal()"></td>
+            <td class="snap-hkd">0.00</td>
+        </tr>
+    `).join('');
+    recalcSnapTotal();
+}
+
+function recalcSnapTotal() {
+    let total = 0;
+    document.querySelectorAll('#snapBody tr').forEach(tr => {
+        const native = parseFloat(tr.querySelector('.snap-native').value) || 0;
+        const rate = parseFloat(tr.querySelector('.snap-rate').value) || 0;
+        const hkd = native * rate;
+        tr.querySelector('.snap-hkd').textContent = hkd.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        total += hkd;
+    });
+    document.getElementById('snapTotal').textContent =
+        total.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+async function fetchPbocRates() {
+    const date = document.getElementById('snapDate').value;
+    const status = document.getElementById('pbocStatus');
+    if (!date) { alert('请先选择日期'); return; }
+    status.textContent = '查询中…';
+
+    const resp = await fetch(`/api/admin/pboc_parity?date=${date}`);
+    const data = await resp.json();
+    if (!resp.ok) {
+        status.textContent = `❌ ${data.error || '查询失败'}`;
+        return;
+    }
+    // Fill rates into non-locked rows
+    document.querySelectorAll('#snapBody tr').forEach(tr => {
+        const mkt = tr.dataset.market;
+        const ccy = tr.querySelector('.snap-currency').value.trim();
+        if (data.rates[ccy] != null && !tr.querySelector('.snap-rate').readOnly) {
+            tr.querySelector('.snap-rate').value = data.rates[ccy];
+        }
+    });
+    recalcSnapTotal();
+    status.innerHTML =
+        `✅ 已填入 <a href="${data.source_url}" target="_blank" style="color:#4a9eff">PBOC ${data.date}</a> 汇率 ` +
+        `(1 HKD = ${data.pboc_raw.HKD} CNY)`;
+}
+
+async function submitSnapshot() {
+    const date = document.getElementById('snapDate').value;
+    const status = document.getElementById('snapStatus');
+    if (!date) { alert('请先选择日期'); return; }
+
+    const entries = Array.from(document.querySelectorAll('#snapBody tr')).map(tr => ({
+        market:        tr.dataset.market,
+        account_name:  tr.querySelector('.snap-name').value.trim(),
+        currency:      tr.querySelector('.snap-currency').value.trim(),
+        total_native:  parseFloat(tr.querySelector('.snap-native').value) || 0,
+        exchange_rate: parseFloat(tr.querySelector('.snap-rate').value) || 0,
+    }));
+
+    if (entries.some(e => e.total_native > 0 && e.exchange_rate <= 0)) {
+        alert('金额>0 的行必须填写汇率'); return;
+    }
+
+    status.textContent = '保存中…';
+    const result = await apiFetch('/api/admin/manual_snapshot', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ date, entries })
+    });
+    if (result && result.ok) {
+        status.textContent =
+            `✅ 已保存 ${result.date}: 总资产 HKD ${result.total_hkd.toLocaleString()} ` +
+            `NAV=${result.nav.toFixed(4)} (${result.pnl_pct >= 0 ? '+' : ''}${result.pnl_pct.toFixed(2)}%)`;
+    } else {
+        status.textContent = `❌ ${result ? result.error : '保存失败'}`;
+    }
 }

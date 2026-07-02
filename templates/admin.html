@@ -69,6 +69,53 @@
             <span id="saveStatus" class="text-muted" style="margin-left:10px;"></span>
         </div>
 
+        <!-- Manual historical snapshot import -->
+        <div class="card">
+            <h3>手动导入历史快照</h3>
+            <p class="text-muted" style="margin-top:-8px;">
+                月结单回填用。日期默认取当月最后工作日；缺失市场填 0，之后重新提交同月即可覆盖。
+            </p>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>快照日期</label>
+                    <input type="date" id="snapDate">
+                </div>
+                <div class="form-group" style="flex:0">
+                    <label>&nbsp;</label>
+                    <button type="button" class="btn btn-outline" onclick="fetchPbocRates()">
+                        🔄 从 PBOC 拉当日汇率
+                    </button>
+                </div>
+                <div class="form-group" style="flex:1">
+                    <label>&nbsp;</label>
+                    <span id="pbocStatus" class="text-muted"></span>
+                </div>
+            </div>
+            <table class="table" id="snapTable" style="margin-top:8px;">
+                <thead>
+                    <tr>
+                        <th>市场</th>
+                        <th>账户名称</th>
+                        <th>币种</th>
+                        <th>原币金额</th>
+                        <th>汇率 (1 外币 = X HKD)</th>
+                        <th>折合 HKD</th>
+                    </tr>
+                </thead>
+                <tbody id="snapBody">
+                    <!-- populated by JS -->
+                </tbody>
+                <tfoot>
+                    <tr style="font-weight:700;">
+                        <td colspan="5" style="text-align:right;">合计 HKD</td>
+                        <td id="snapTotal">0.00</td>
+                    </tr>
+                </tfoot>
+            </table>
+            <button class="btn btn-primary" onclick="submitSnapshot()">保存快照</button>
+            <span id="snapStatus" class="text-muted" style="margin-left:10px;"></span>
+        </div>
+
         <!-- User Management -->
         <div class="card">
             <h3>用户管理</h3>

@@ -445,6 +445,250 @@ def api_admin_config():
     return jsonify({'ok': True})
 
 
+# ─────────────────────────────────────────────
+# PBOC central-parity FX lookup + manual historical snapshot import
+# ─────────────────────────────────────────────
+# Rationale: the Futu OpenAPI cannot return historical NAV for a past
+# date (accinfo_query is a live snapshot). To backfill the equity curve
+# from monthly statements the admin punches in the raw native amount +
+# FX rate per market. FX rates come from PBOC's daily central parity —
+# authoritative and free to fetch, at the cost of scraping a Chinese
+# government site that occasionally hiccups. Fall back to manual entry
+# when the scrape fails.
+
+_PBOC_LIST_URL = (
+    'https://www.pbc.gov.cn/zhengcehuobisi/125207/125217/125925/'
+    'index.html'
+)
+_PBOC_PAGE_URL = (
+    'https://www.pbc.gov.cn/zhengcehuobisi/125207/125217/125925/'
+    '17105-{page}.html'
+)
+_PBOC_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
+
+
+def _pboc_fetch(url):
+    """HTTP GET with SSL verification relaxed (PBOC's cert chain is
+    sometimes missing intermediates in headless containers)."""
+    import urllib.request
+    import ssl
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    req = urllib.request.Request(url, headers={'User-Agent': _PBOC_UA})
+    with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+        return resp.read().decode('utf-8', 'replace')
+
+
+def _pboc_find_detail_url(target_date):
+    """Locate the detail-page URL for a target date on PBOC's paginated
+    list. Pages are 20 items each, latest first, starting at page 1
+    (which lives at index.html; subsequent pages at 17105-N.html).
+    Returns the absolute detail URL or None if the date isn't present.
+
+    target_date: 'YYYY-MM-DD'
+    """
+    import re
+    y, m, d = target_date.split('-')
+    needle = f'{int(y)}年{int(m)}月{int(d)}日'
+
+    # Estimate the page number: newest entry is today, ~20 trading days
+    # per page. Days behind divided by 20 gives a starting guess; then
+    # we walk forwards/backwards a few pages to be safe.
+    from datetime import date as _date
+    try:
+        target = _date.fromisoformat(target_date)
+        days_behind = max(0, (_date.today() - target).days)
+        # Only ~5 trading days per calendar week → ~20 per 4 weeks;
+        # 20 entries per page → ~28 calendar days per page.
+        start_page = max(1, days_behind // 28)
+    except ValueError:
+        start_page = 1
+
+    # Probe up to 12 pages centered on the estimate (covers ~1 year of
+    # date drift in either direction, plenty for statement backfill).
+    seen = set()
+    for offset in [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, 6, 7]:
+        page = start_page + offset
+        if page < 1 or page in seen:
+            continue
+        seen.add(page)
+        try:
+            url = _PBOC_LIST_URL if page == 1 else _PBOC_PAGE_URL.format(page=page)
+            html = _pboc_fetch(url)
+        except Exception:
+            continue
+        if needle not in html:
+            continue
+        # Extract the detail-page relative link that immediately precedes
+        # our date needle. Format:
+        #   href="/zhengcehuobisi/.../2025123109021714424/index.html"
+        idx = html.find(needle)
+        window = html[max(0, idx - 800):idx]
+        m = re.search(r'href="(/zhengcehuobisi/[^"]+/index\.html)"[^>]*>\s*$', window)
+        if not m:
+            # loosen — grab the last detail href in the window
+            hrefs = re.findall(r'href="(/zhengcehuobisi/[^"]+/index\.html)"', window)
+            if not hrefs:
+                continue
+            return 'https://www.pbc.gov.cn' + hrefs[-1]
+        return 'https://www.pbc.gov.cn' + m.group(1)
+    return None
+
+
+def _pboc_parse_rates(detail_html):
+    """Pull '1<currency>对人民币<rate>元' pairs from a PBOC detail page.
+    Returns a {ccy_name: cny_per_unit} dict for the currencies we care
+    about."""
+    import re
+    text = re.sub(r'<[^>]+>', ' ', detail_html)
+    text = re.sub(r'\s+', ' ', text)
+    rates = {}
+    for ccy_zh, key in [
+        ('美元', 'USD'),
+        ('港元', 'HKD'),
+        ('澳大利亚元', 'AUD'),
+    ]:
+        m = re.search(rf'1{ccy_zh}对人民币([\d.]+)元', text)
+        if m:
+            rates[key] = float(m.group(1))
+    return rates
+
+
+@app.route('/api/admin/pboc_parity')
+@admin_required
+def api_pboc_parity():
+    """Look up USD→HKD and AUD→HKD (via CNY cross rate) from PBOC's
+    daily central parity announcement for a given trading day.
+
+    Query params:
+      date=YYYY-MM-DD
+
+    Returns:
+      {
+        date: 'YYYY-MM-DD',
+        source_url: '...',
+        rates: { HKD: 1.0, USD: <hkd_per_usd>, AUD: <hkd_per_aud> },
+        pboc_raw: { USD_CNY, HKD_CNY, AUD_CNY }
+      }
+    or {error: '...'} on failure.
+    """
+    target = (request.args.get('date') or '').strip()
+    if not target:
+        return jsonify({'error': 'date required (YYYY-MM-DD)'}), 400
+    try:
+        detail_url = _pboc_find_detail_url(target)
+    except Exception as e:
+        return jsonify({'error': f'PBOC lookup failed: {e}'}), 502
+    if not detail_url:
+        return jsonify({
+            'error': f'No PBOC announcement found for {target}. '
+                     f'Not a trading day, or the page moved.'
+        }), 404
+    try:
+        html = _pboc_fetch(detail_url)
+    except Exception as e:
+        return jsonify({'error': f'Fetch detail failed: {e}'}), 502
+    raw = _pboc_parse_rates(html)
+    if 'HKD' not in raw or raw['HKD'] <= 0:
+        return jsonify({'error': 'Could not parse HKD/CNY rate from PBOC page'}), 500
+    hkd_cny = raw['HKD']  # e.g. 1 HKD = 0.90322 CNY
+    rates = {'HKD': 1.0}
+    if 'USD' in raw:
+        rates['USD'] = round(raw['USD'] / hkd_cny, 6)  # HKD per USD
+    if 'AUD' in raw:
+        rates['AUD'] = round(raw['AUD'] / hkd_cny, 6)  # HKD per AUD
+    return jsonify({
+        'date': target,
+        'source_url': detail_url,
+        'rates': rates,
+        'pboc_raw': raw,
+    })
+
+
+@app.route('/api/admin/manual_snapshot', methods=['POST'])
+@admin_required
+def api_manual_snapshot():
+    """Insert a historical snapshot into account_snapshots + daily_nav.
+
+    Payload:
+      {
+        date: 'YYYY-MM-DD',
+        entries: [
+          { account_name: 'Futu HK',  market: 'HK', currency: 'HKD',
+            total_native: 5127945.59, exchange_rate: 1.0 },
+          { account_name: 'Moomoo US',market: 'US', currency: 'USD',
+            total_native: 1620256.50, exchange_rate: 7.7822 },
+          { account_name: 'Moomoo AU',market: 'AU', currency: 'AUD',
+            total_native: 0,          exchange_rate: 5.5124 },
+        ]
+      }
+
+    Uses INSERT OR REPLACE keyed on (date, account_name) so re-submitting
+    the same month overwrites — matches the user's "fill 0 first, then
+    replace when statements arrive" workflow.
+    """
+    data = request.get_json() or {}
+    target_date = (data.get('date') or '').strip()
+    entries = data.get('entries', [])
+    if not target_date or not entries:
+        return jsonify({'error': 'date and entries[] required'}), 400
+
+    total_hkd = 0.0
+    written_markets = []
+    initial_capital = float(get_config('initial_capital', '1000000'))
+
+    with get_db() as conn:
+        for e in entries:
+            name = (e.get('account_name') or '').strip()
+            market = (e.get('market') or '').strip()
+            ccy = (e.get('currency') or '').strip() or 'HKD'
+            native = float(e.get('total_native') or 0)
+            rate = float(e.get('exchange_rate') or 0)
+            # Skip rows with no data. "Native amount == 0" means the user
+            # has no statement for this market on this date — don't
+            # write a zero row that would drag the aggregate down.
+            # Non-zero amounts still require a valid rate.
+            if not name or native <= 0 or rate <= 0:
+                continue
+            hkd = native * rate
+            total_hkd += hkd
+            written_markets.append(market or name)
+            conn.execute("""
+                INSERT OR REPLACE INTO account_snapshots
+                    (date, account_name, market, currency,
+                     total_assets, exchange_rate, total_assets_hkd)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (target_date, name, market, ccy, native, rate, hkd))
+
+        # If no market contributed a non-zero value, skip the daily_nav
+        # row entirely — the equity curve should only pass through days
+        # for which we have at least one real observation.
+        if not written_markets:
+            return jsonify({
+                'ok': True,
+                'date': target_date,
+                'skipped': True,
+                'reason': 'All markets are empty; no snapshot written.',
+            })
+
+        nav = total_hkd / initial_capital if initial_capital > 0 else 1.0
+        pnl_pct = (nav - 1.0) * 100
+        conn.execute("""
+            INSERT OR REPLACE INTO daily_nav (date, total_assets_hkd, nav, pnl_pct)
+            VALUES (?, ?, ?, ?)
+        """, (target_date, total_hkd, nav, pnl_pct))
+
+    return jsonify({
+        'ok': True,
+        'date': target_date,
+        'total_hkd': total_hkd,
+        'nav': nav,
+        'pnl_pct': pnl_pct,
+        'markets_written': written_markets,
+    })
+
+
 @app.route('/api/admin/users', methods=['GET', 'POST', 'DELETE'])
 @admin_required
 def api_admin_users():
