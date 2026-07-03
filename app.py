@@ -395,6 +395,70 @@ def api_summary():
     })
 
 
+@app.route('/api/admin/user_assets')
+@admin_required
+def api_admin_user_assets():
+    """Admin-only: per-user initial / current / pnl overview for the
+    dashboard table.
+
+    Same rebase logic as /api/summary — a regular user's "current
+    assets" is `personal_initial_capital * nav` (their share of the
+    pool given the pool's current nav), and pnl is that minus their
+    initial. Admins themselves are excluded from the per-user list:
+    the pool row already represents them, so listing the admin account
+    would double-count. Users with personal_initial_capital NULL get
+    null fields (dashboard renders '--').
+    """
+    with get_db() as conn:
+        latest = conn.execute(
+            "SELECT date, total_assets_hkd, nav FROM daily_nav "
+            "ORDER BY date DESC LIMIT 1"
+        ).fetchone()
+        users = conn.execute(
+            "SELECT id, username, is_admin, personal_initial_capital "
+            "FROM users ORDER BY is_admin DESC, id"
+        ).fetchall()
+
+    if not latest:
+        return jsonify({'has_data': False})
+
+    nav = latest['nav']
+    pool_initial = float(get_config('initial_capital', '1000000'))
+    pool_current = latest['total_assets_hkd']
+
+    user_rows = []
+    for u in users:
+        # Skip admins — the pool row covers them.
+        if u['is_admin']:
+            continue
+        personal = u['personal_initial_capital']
+        if personal is None:
+            initial = current = pnl = None
+        else:
+            initial = float(personal)
+            current = initial * nav
+            pnl = current - initial
+        user_rows.append({
+            'id': u['id'],
+            'username': u['username'],
+            'initial': initial,
+            'current': current,
+            'pnl': pnl,
+        })
+
+    return jsonify({
+        'has_data': True,
+        'date': latest['date'],
+        'nav': nav,
+        'pool': {
+            'initial': pool_initial,
+            'current': pool_current,
+            'pnl': pool_current - pool_initial,
+        },
+        'users': user_rows,
+    })
+
+
 # ─────────────────────────────────────────────
 # Routes: API - Data Sync (trigger Futu data fetch)
 # ─────────────────────────────────────────────

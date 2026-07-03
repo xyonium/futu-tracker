@@ -79,6 +79,30 @@
             </div>
         </div>
         {% endif %}
+
+        <!-- Per-user assets overview (admin only — pool total + each
+             non-admin user's initial/current/pnl. Regular users only
+             see their own rebased totals in the summary cards above.) -->
+        {% if is_admin %}
+        <div class="card">
+            <h3>用户资产总览 <span id="userAssetsDate" class="text-muted"></span></h3>
+            <div class="table-responsive">
+                <table class="table" id="userAssetsTable">
+                    <thead>
+                        <tr>
+                            <th>用户</th>
+                            <th>初始资产 (HKD)</th>
+                            <th>当前资产 (HKD)</th>
+                            <th>收益额 (HKD)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="userAssetsBody">
+                        <tr><td colspan="4" class="text-center text-muted">暂无数据</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
     </main>
 
     <script src="/static/js/dashboard.js"></script>

@@ -10,6 +10,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (document.getElementById('accountBody')) {
         loadAccountDetail();
     }
+    // Per-user assets overview — also admin-only, also DOM-gated.
+    if (document.getElementById('userAssetsBody')) {
+        loadUserAssets();
+    }
 
     document.querySelectorAll('.period-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -276,4 +280,46 @@ async function loadAccountDetail() {
     </tr>`;
 
     tbody.innerHTML = html;
+}
+
+// ─── Per-user assets overview (admin dashboard table) ───
+// Pool row + one row per non-admin user. Null initial_capital → '--'
+// (user hasn't been given an anchor yet), matching /api/summary's
+// degrade behavior.
+async function loadUserAssets() {
+    const data = await apiFetch('/api/admin/user_assets');
+    if (!data || !data.has_data) return;
+
+    document.getElementById('userAssetsDate').textContent = `(${data.date})`;
+
+    const fmtMoney = v => formatNumber(v, 0);
+    const pnlCell = (pnl) => {
+        if (pnl == null) return '<td>--</td>';
+        const cls = pnl >= 0 ? 'positive' : 'negative';
+        const sign = pnl >= 0 ? '+' : '';
+        return `<td class="${cls}">${sign}${fmtMoney(pnl)}</td>`;
+    };
+
+    const pool = data.pool;
+    let html = `
+        <tr style="font-weight:700; border-top:2px solid var(--border)">
+            <td>整体 (资金池)</td>
+            <td>${fmtMoney(pool.initial)}</td>
+            <td>${fmtMoney(pool.current)}</td>
+            ${pnlCell(pool.pnl)}
+        </tr>`;
+
+    html += (data.users || []).map(u => {
+        const init = u.initial == null ? '--' : fmtMoney(u.initial);
+        const cur  = u.current == null ? '--' : fmtMoney(u.current);
+        return `
+        <tr>
+            <td>${u.username}</td>
+            <td>${init}</td>
+            <td>${cur}</td>
+            ${pnlCell(u.pnl)}
+        </tr>`;
+    }).join('');
+
+    document.getElementById('userAssetsBody').innerHTML = html;
 }
