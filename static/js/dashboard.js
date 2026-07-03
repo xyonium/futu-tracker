@@ -69,20 +69,27 @@ async function loadChart(period) {
     const data = await apiFetch(`/api/nav_history?period=${period}`);
     if (!data || !data.data || data.data.length === 0) return;
 
-    const labels = data.data.map(d => d.date);
-    const navValues = data.data.map(d => d.nav);
-    const pnlValues = data.data.map(d => d.pnl_pct);
-
     const ctx = document.getElementById('navChart').getContext('2d');
-
     if (navChart) navChart.destroy();
 
-    // Determine chart color based on latest PnL
+    if (data.is_admin) {
+        navChart = buildAdminStackChart(ctx, data.data);
+    } else {
+        navChart = buildNavCurveChart(ctx, data.data);
+    }
+}
+
+// ─── Regular-user chart: pure NAV curve (unchanged behavior) ───
+function buildNavCurveChart(ctx, series) {
+    const labels    = series.map(d => d.date);
+    const navValues = series.map(d => d.nav);
+    const pnlValues = series.map(d => d.pnl_pct);
+
     const lastPnl = pnlValues[pnlValues.length - 1];
     const lineColor = lastPnl >= 0 ? '#22c55e' : '#ef4444';
     const fillColor = lastPnl >= 0 ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)';
 
-    navChart = new Chart(ctx, {
+    return new Chart(ctx, {
         type: 'line',
         data: {
             labels: labels,
@@ -101,10 +108,7 @@ async function loadChart(period) {
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            interaction: {
-                intersect: false,
-                mode: 'index'
-            },
+            interaction: { intersect: false, mode: 'index' },
             plugins: {
                 legend: { display: false },
                 tooltip: {
@@ -135,6 +139,109 @@ async function loadChart(period) {
                     ticks: {
                         color: '#8b8fa3',
                         callback: (v) => v.toFixed(3)
+                    }
+                }
+            }
+        }
+    });
+}
+
+// ─── Admin chart: stacked HKD by market ───
+// HK/US/AU are stacked; the visual top of the stack == total_assets_hkd
+// on daily_nav for that date. Tooltip shows the total (HKD) plus each
+// market's native balance (原币).
+const MARKET_ORDER = ['HK', 'US', 'AU'];
+const MARKET_META = {
+    HK: { label: '香港 (HK)',   color: '#22c55e', fill: 'rgba(34,197,94,0.35)'  },
+    US: { label: '美国 (US)',   color: '#3b82f6', fill: 'rgba(59,130,246,0.35)' },
+    AU: { label: '澳洲 (AU)',   color: '#f59e0b', fill: 'rgba(245,158,11,0.35)' },
+};
+
+function buildAdminStackChart(ctx, series) {
+    const labels = series.map(d => d.date);
+    const totals = series.map(d => d.total_assets_hkd);
+
+    // Native balance is what we show in the tooltip. Stash it alongside
+    // the HKD-series values so the tooltip callback can pull it out
+    // without a second lookup — Chart.js only exposes the raw dataset
+    // and dataIndex there.
+    const datasets = MARKET_ORDER.map(mkt => {
+        const meta = MARKET_META[mkt];
+        return {
+            label: meta.label,
+            data: series.map(d => (d.markets && d.markets[mkt]) ? d.markets[mkt].hkd : 0),
+            _native: series.map(d => (d.markets && d.markets[mkt]) ? d.markets[mkt].native : 0),
+            _currency: series.map(d => (d.markets && d.markets[mkt]) ? d.markets[mkt].currency : ''),
+            borderColor: meta.color,
+            backgroundColor: meta.fill,
+            borderWidth: 1.5,
+            fill: true,
+            tension: 0.25,
+            pointRadius: labels.length > 60 ? 0 : 2,
+            pointHoverRadius: 4,
+            stack: 'assets',
+        };
+    });
+
+    const fmtHKD    = v => Number(v).toLocaleString('en-US', {maximumFractionDigits: 0});
+    const fmtNative = v => Number(v).toLocaleString('en-US', {maximumFractionDigits: 2});
+
+    return new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { intersect: false, mode: 'index' },
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: { color: '#c8ccdc', boxWidth: 12 }
+                },
+                tooltip: {
+                    callbacks: {
+                        title: (items) => items[0].label,
+                        // First row of the tooltip body: the daily total.
+                        // We emit it as a synthetic line before the market
+                        // rows so it always shows first.
+                        beforeBody: (items) => {
+                            const idx = items[0].dataIndex;
+                            return `总额 HKD: ${fmtHKD(totals[idx])}`;
+                        },
+                        label: (item) => {
+                            const idx = item.dataIndex;
+                            const ds = item.dataset;
+                            const native = ds._native[idx];
+                            const ccy = ds._currency[idx] || '';
+                            if (!native) return `${ds.label}: —`;
+                            return `${ds.label}: ${fmtNative(native)} ${ccy}`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    type: 'time',
+                    time: {
+                        unit: labels.length > 180 ? 'month' : (labels.length > 30 ? 'week' : 'day'),
+                        tooltipFormat: 'yyyy-MM-dd'
+                    },
+                    grid: { color: 'rgba(255,255,255,0.05)' },
+                    ticks: { color: '#8b8fa3', maxTicksLimit: 12 }
+                },
+                y: {
+                    stacked: true,
+                    grid: { color: 'rgba(255,255,255,0.05)' },
+                    ticks: {
+                        color: '#8b8fa3',
+                        callback: (v) => {
+                            // Compact HKD axis: 1.2M / 850K etc.
+                            const abs = Math.abs(v);
+                            if (abs >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+                            if (abs >= 1e3) return (v / 1e3).toFixed(0) + 'K';
+                            return v.toFixed(0);
+                        }
                     }
                 }
             }

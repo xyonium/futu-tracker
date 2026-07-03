@@ -264,6 +264,8 @@ def api_nav_history():
     if start < inception_date:
         start = inception_date
 
+    is_admin = bool(session.get('is_admin'))
+
     with get_db() as conn:
         rows = conn.execute(
             "SELECT date, total_assets_hkd, nav, pnl_pct FROM daily_nav "
@@ -271,10 +273,39 @@ def api_nav_history():
             (start,)
         ).fetchall()
 
+        # Admin chart wants a stacked breakdown by market — pull all
+        # account_snapshots in the range in one query and pivot into
+        # {date: {market: {hkd, native, currency}}} for the response.
+        # Regular users don't see raw HKD amounts, so we skip this.
+        by_date_market = {}
+        if is_admin and rows:
+            snap_rows = conn.execute(
+                "SELECT date, market, currency, total_assets, total_assets_hkd "
+                "FROM account_snapshots WHERE date >= ? ORDER BY date",
+                (start,)
+            ).fetchall()
+            for r in snap_rows:
+                mkt = (r['market'] or '').upper()
+                if not mkt:
+                    continue
+                by_date_market.setdefault(r['date'], {})[mkt] = {
+                    'hkd': r['total_assets_hkd'],
+                    'native': r['total_assets'],
+                    'currency': r['currency'],
+                }
+
+    data = []
+    for r in rows:
+        entry = dict(r)
+        if is_admin:
+            entry['markets'] = by_date_market.get(r['date'], {})
+        data.append(entry)
+
     return jsonify({
         'inception_date': inception_date,
         'initial_capital': float(get_config('initial_capital', '1000000')),
-        'data': [dict(r) for r in rows]
+        'is_admin': is_admin,
+        'data': data,
     })
 
 
