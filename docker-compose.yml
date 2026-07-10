@@ -3,7 +3,7 @@ services:
     # Pre-built image from GHCR (pushed by .github/workflows/build-docker.yml).
     # No `build:` key — pulling avoids a local build on `docker compose up`.
     # To build locally instead, swap this for `build: ./opend`.
-    image: ghcr.io/er-epr/futu-tracker-opend:latest
+    image: ghcr.io/er-epr/futu-opend:latest
     container_name: futu-opend
     # Bound retry — 3 crashes = give up. Avoids the "登录次数过多" 45-min
     # rate limit that unbounded restart-on-crash triggers.

@@ -27,10 +27,12 @@ jobs:
       matrix:
         include:
           # Tracker image — Flask app (root Dockerfile).
-          - image_suffix: tracker
+          # Resulting tag: ghcr.io/er-epr/futu-tracker
+          - image_name: futu-tracker
             context: .
           # OpenD gateway image — headless Futu OpenD (opend/Dockerfile).
-          - image_suffix: opend
+          # Resulting tag: ghcr.io/er-epr/futu-opend
+          - image_name: futu-opend
             context: ./opend
 
     steps:
@@ -48,7 +50,14 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Read Docker Image Identifiers
-        run: echo IMAGE_REPOSITORY=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]') >> $GITHUB_ENV
+        # Lowercase the repo (ER-EPR/futu-tracker -> er-epr/futu-tracker) and
+        # keep the namespace (er-epr) so we push under the user's own GHCR
+        # library — not the registry root, which we lack permission for.
+        # The trailing image name (futu-tracker / futu-opend) comes from the
+        # matrix, decoupled from the repo name so opend isn't forced to
+        # "futu-tracker-opend".
+        run: |
+          echo NAMESPACE=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]' | cut -d/ -f1) >> $GITHUB_ENV
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -56,11 +65,11 @@ jobs:
           context: ${{ matrix.context }}
           push: true
           tags: |
-            ghcr.io/${{ env.IMAGE_REPOSITORY }}-${{ matrix.image_suffix }}:latest
-            ghcr.io/${{ env.IMAGE_REPOSITORY }}-${{ matrix.image_suffix }}:${{ github.sha }}
+            ghcr.io/${{ env.NAMESPACE }}/${{ matrix.image_name }}:latest
+            ghcr.io/${{ env.NAMESPACE }}/${{ matrix.image_name }}:${{ github.sha }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.description=Futu portfolio tracker — ${{ matrix.image_suffix }} image
+            org.opencontainers.image.description=Futu portfolio tracker — ${{ matrix.image_name }} image
             org.opencontainers.image.licenses=MIT
           cache-from: type=gha
           cache-to: type=gha,mode=max
