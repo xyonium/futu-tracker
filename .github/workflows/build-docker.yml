@@ -1,0 +1,66 @@
+name: Build and Push Docker Images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Dockerfile'
+      - 'opend/Dockerfile'
+      - 'requirements.txt'
+      - 'app.py'
+      - 'futu_client.py'
+      - 'scheduler.py'
+      - 'opend/entrypoint.sh'
+      - 'opend/bootstrap-vnc.sh'
+      - 'opend/render-config.sh'
+      - '.github/workflows/build-docker.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        include:
+          # Tracker image — Flask app (root Dockerfile).
+          - image_suffix: tracker
+            context: .
+          # OpenD gateway image — headless Futu OpenD (opend/Dockerfile).
+          - image_suffix: opend
+            context: ./opend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Read Docker Image Identifiers
+        run: echo IMAGE_REPOSITORY=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]') >> $GITHUB_ENV
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: |
+            ghcr.io/${{ env.IMAGE_REPOSITORY }}-${{ matrix.image_suffix }}:latest
+            ghcr.io/${{ env.IMAGE_REPOSITORY }}-${{ matrix.image_suffix }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=Futu portfolio tracker — ${{ matrix.image_suffix }} image
+            org.opencontainers.image.licenses=MIT
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
