@@ -19,7 +19,6 @@ Asia/Hong_Kong, matching the OpenD container's default TZ and the HKD-
 denominated reporting throughout the app.
 """
 
-import sys
 import os
 import logging
 from datetime import date

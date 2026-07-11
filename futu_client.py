@@ -25,7 +25,7 @@ https://openapi.futunn.com/futu-api-doc/intro/ai.html):
 import json
 import sqlite3
 import os
-from datetime import datetime, date
+from datetime import date
 from contextlib import contextmanager
 
 # futu-api is imported at runtime — see get_account_balance / sync_all_accounts

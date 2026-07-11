@@ -6,7 +6,6 @@ Multi-account portfolio tracking with currency conversion and NAV calculation.
 
 import os
 import json
-import hashlib
 import secrets
 import sqlite3
 from datetime import datetime, timedelta
