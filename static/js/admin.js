@@ -119,15 +119,28 @@ async function triggerSync() {
     const status = document.getElementById('saveStatus');
     status.textContent = '同步中...请稍候';
 
-    const result = await apiFetch('/api/sync', {
+    const r = await apiFetch('/api/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
     });
 
-    if (result && result.ok) {
-        status.textContent = `✅ 同步完成: 总资产 HKD ${Number(result.result.total_hkd).toLocaleString()}`;
+    // Back-compat: the old response had only {ok, result}. The enriched
+    // shape adds skipped/accounts_ok/accounts_total/errors so a total
+    // fetch failure (every account threw, no daily_nav written) shows red
+    // with the cause — instead of a green "HKD 0" that looks like success.
+    if (r && r.ok) {
+        const total = Number(r.result.total_hkd).toLocaleString();
+        const okN = r.accounts_ok ?? r.result.accounts?.filter(a => a.success).length ?? '?';
+        const totN = r.accounts_total ?? r.result.accounts?.length ?? '?';
+        status.textContent = `✅ 同步完成: 总资产 HKD ${total}  (${okN}/${totN} 账户)`;
     } else {
-        status.textContent = `❌ 同步失败: ${result ? result.error : 'Unknown error'}`;
+        const errs = (r && Array.isArray(r.errors) && r.errors.length)
+            ? r.errors.join(' | ')
+            : (r && (r.error || (r.result && r.result.skipped_reason)));
+        const total = r && r.accounts_total != null ? r.accounts_total : '?';
+        const ok = r && r.accounts_ok != null ? r.accounts_ok : 0;
+        const sk = r && r.skipped ? '（未写入当日 NAV，避免覆盖历史数据）' : '';
+        status.textContent = `❌ 同步失败: ${ok}/${total} 账户成功 ${sk}${errs ? ' — ' + errs : ''}`;
     }
 }
 

@@ -343,6 +343,7 @@ def sync_all_accounts(target_date=None):
 
     results = []
     total_hkd = 0.0
+    ok_count = 0
 
     for acct in accounts:
         try:
@@ -357,6 +358,7 @@ def sync_all_accounts(target_date=None):
             currency = bal['native_currency']
             rate = bal['fx_rate']
             total_hkd += assets_hkd
+            ok_count += 1
 
             # Save snapshot — `total_assets` is in the account's native
             # currency, `total_assets_hkd` is what Futu itself reports for
@@ -387,6 +389,30 @@ def sync_all_accounts(target_date=None):
                 'error': str(e),
             })
 
+    # If EVERY account failed, do NOT persist a daily_nav row. Writing a
+    # total_hkd=0 / nav=0 / pnl=-100% row here would overwrite a good
+    # historical entry for this date (INSERT OR REPLACE) and silently drag
+    # the equity curve to zero for a fetch outage — which is exactly what
+    # a missing .encryption_key or a dead OpenD would otherwise do. The
+    # manual-import handler has the same guard (app.py manual_snapshot).
+    #
+    # A day with a genuine zero portfolio is vanishingly unlikely for this
+    # use case (the pool is never empty), and even then the admin can
+    # still force a 0 via the manual-snapshot form. We prefer "missing
+    # data point" over "misleading zero point".
+    if ok_count == 0:
+        return {
+            'date': target_date,
+            'total_hkd': 0.0,
+            'nav': None,
+            'pnl_pct': None,
+            'accounts': results,
+            'ok_count': 0,
+            'skipped': True,
+            'skipped_reason': 'All accounts failed; no daily_nav row written',
+            'errors': [r.get('error') for r in results if not r.get('success')],
+        }
+
     # Save daily NAV
     nav = total_hkd / initial_capital if initial_capital > 0 else 1.0
     pnl_pct = (nav - 1.0) * 100
@@ -403,6 +429,8 @@ def sync_all_accounts(target_date=None):
         'nav': nav,
         'pnl_pct': pnl_pct,
         'accounts': results,
+        'ok_count': ok_count,
+        'skipped': False,
     }
 
 

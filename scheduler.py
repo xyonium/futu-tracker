@@ -43,9 +43,24 @@ def _run_sync(label):
     logger.info(f"[{label}] starting sync for {today}")
     try:
         result = sync_all_accounts(target_date=today)
+        ok = result.get('ok_count', 0)
+        if result.get('skipped'):
+            # Every account failed and no daily_nav row was written. Spell
+            # this out loudly so an outage (e.g. missing .encryption_key,
+            # dead OpenD) is obvious in scheduler.log instead of masquerad-
+            # ing as a "done NAV=0.0" success line.
+            logger.error(
+                f"[{label}] SKIPPED daily_nav for {today}: "
+                f"0/{len(result.get('accounts', []))} accounts OK — "
+                f"{result.get('skipped_reason')}"
+            )
+            for err in result.get('errors', []):
+                logger.error(f"  cause: {err}")
+            return
         logger.info(
             f"[{label}] done  NAV={result.get('nav', 'N/A')}  "
-            f"Total HKD={result.get('total_hkd', 'N/A')}"
+            f"Total HKD={result.get('total_hkd', 'N/A')}  "
+            f"({ok}/{len(result.get('accounts', []))} accounts OK)"
         )
         for acct in result.get('accounts', []):
             if acct.get('success'):

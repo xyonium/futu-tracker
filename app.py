@@ -465,13 +465,42 @@ def api_admin_user_assets():
 @app.route('/api/sync', methods=['POST'])
 @admin_required
 def api_sync():
-    """Manually trigger data sync from Futu API."""
+    """Manually trigger data sync from Futu API.
+
+    Response shape (back-compat: keep `ok`+`result` for older UIs):
+      {'ok': bool, 'result': {...}, 'skipped': bool, 'accounts_ok': N,
+       'accounts_total': N total, 'errors': [...]}
+
+    `ok` is False when ─  a top-level exception aborted the run, OR every
+    account failed and `sync_all_accounts` skipped writing a daily_nav row
+    (so `result.skipped` is True). The admin UI turns this case red and
+    lists the per-account errors, instead of showing a green "HKD 0".
+
+    A *partial* failure (some accounts OK) still returns ok=True because a
+    real daily_nav row was written; the failing accounts are surfaced via
+    `result.accounts[].success=False` for display.
+    """
     from futu_client import sync_all_accounts
     try:
         result = sync_all_accounts()
-        return jsonify({'ok': True, 'result': result})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        # Hard failure before/around the sync loop — nothing was written.
+        return jsonify({'ok': False, 'error': str(e),
+                        'skipped': True}), 500
+
+    accounts = result.get('accounts', [])
+    errors = [a.get('error') for a in accounts if not a.get('success')]
+    skipped = bool(result.get('skipped'))
+    # Every account failed → treat as not-ok so the UI alarms.
+    any_ok = result.get('ok_count', 0) > 0
+    return jsonify({
+        'ok': (not skipped) and any_ok,
+        'result': result,
+        'skipped': skipped,
+        'accounts_ok': result.get('ok_count', 0),
+        'accounts_total': len(accounts),
+        'errors': errors,
+    })
 
 
 # ─────────────────────────────────────────────
