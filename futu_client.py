@@ -32,7 +32,9 @@ from contextlib import contextmanager
 # import futu as ft
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'data', 'portfolio.db')
-ENCRYPTION_KEY_FILE = os.path.join(os.path.dirname(__file__), 'data', '.encryption_key')
+# Legacy Fernet sidecar kept only for one-time migration of old
+# futu_rsa_key_encrypted blobs to a plain futu_rsa_key row.
+_ENCRYPTION_KEY_FILE = os.path.join(os.path.dirname(__file__), 'data', '.encryption_key')
 
 
 @contextmanager
@@ -52,14 +54,56 @@ def get_config(key, default=None):
         return row['value'] if row else default
 
 
-def decrypt_rsa_key():
-    from cryptography.fernet import Fernet
+def _load_rsa_key():
+    """Return the Futu RSA private-key PEM string from config, or None.
+
+    Storage model (current): the PEM lives plainly in config.futu_rsa_key.
+    No sidecar file is required, so a volume swap that keeps the DB cannot
+    brick sync the way the old .encryption_key arrangement did.
+
+    Migration: older deployments stored a Fernet-encrypted blob in
+    futu_rsa_key_encrypted alongside a .encryption_key sidecar. If the
+    plain key is unset but both legacy artifacts exist, decrypt once,
+    persist as plain futu_rsa_key, and drop the encrypted blob + sidecar.
+    If the encrypted blob exists but the sidecar is MISSING (the exact
+    failure that caused the 2026-07-11 all-zero NAV), we cannot recover the
+    old key — return None and let the caller raise a clear, actionable
+    error telling the admin to re-paste the key, rather than per-account
+    FileNotFoundError noise.
+    """
+    plain = get_config('futu_rsa_key')
+    if plain:
+        return plain
+
     encrypted = get_config('futu_rsa_key_encrypted')
     if not encrypted:
         return None
-    with open(ENCRYPTION_KEY_FILE, 'rb') as f:
+
+    if not os.path.exists(_ENCRYPTION_KEY_FILE):
+        # Unrecoverable: the DB still has the encrypted blob but the Fernet
+        # key that decrypted it is gone. Don't pretend — surface a single
+        # clear message via the caller's RuntimeError.
+        return None
+
+    from cryptography.fernet import Fernet
+    with open(_ENCRYPTION_KEY_FILE, 'rb') as f:
         key = f.read()
-    return Fernet(key).decrypt(encrypted.encode()).decode()
+    pem = Fernet(key).decrypt(encrypted.encode()).decode()
+
+    # Persist plainly and retire the legacy pair.
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+            ('futu_rsa_key', pem),
+        )
+        conn.execute(
+            "DELETE FROM config WHERE key='futu_rsa_key_encrypted'"
+        )
+    try:
+        os.remove(_ENCRYPTION_KEY_FILE)
+    except OSError:
+        pass  # best effort; the plain copy is what matters
+    return pem
 
 
 # ─────────────────────────────────────────────
@@ -102,20 +146,32 @@ _MARKET_CURRENCY = {
 }
 
 
+_RSA_TEMP_PATH = None  # path of the materialised PEM tempfile, for cleanup
+
+
 def _rsa_key_to_tempfile():
     """
-    Materialise the DB-stored RSA private key to a tempfile so the futu
-    SDK can point `SysConfig.set_init_rsa_file` at it.
+    Materialise the DB-stored RSA private key to a mode-0600 tempfile in
+    /tmp so the futu SDK can point `SysConfig.set_init_rsa_file` at it.
 
-    Futu proto encryption is a **shared private key** scheme, not asymmetric:
-    OpenD (via <rsa_private_key> in FutuOpenD.xml) and every SDK client
-    load the *same* PKCS#1 1024-bit private key. Do not try to feed a
-    public key here — the SDK's `_read_rsa_keys` refuses with "This is
-    not a private key". See docs/opend-setup.md for the underlying
-    handshake spec (documented in Chinese as "要求1024位, 格式为PKCS#1").
+    The SDK reads this file exactly once (RsaCrypt.encrypt →
+    SysConfig.get_init_rsa_obj caches RSA_OBJ for the process lifetime),
+    so we only need a valid path at first-connect time. The tempfile is
+    removed at process exit via atexit so the plaintext PEM does not
+    linger on disk between container restarts; recreating it on a later
+    connect is cheap if needed.
+
+    Futu proto encryption is a **shared private key** scheme, not
+    asymmetric: OpenD (via <rsa_private_key> in FutuOpenD.xml) and every
+    SDK client load the *same* PKCS#1 1024-bit private key. Do not feed
+    a public key here — the SDK's `_read_rsa_keys` refuses with "This is
+    not a private key". See docs/opend-setup.md for the handshake spec
+    ("要求1024位, 格式为PKCS#1").
     """
+    import atexit
     import tempfile
-    key = decrypt_rsa_key()
+    global _RSA_TEMP_PATH
+    key = _load_rsa_key()
     if not key:
         return None
     key = key.strip() + "\n"
@@ -125,7 +181,22 @@ def _rsa_key_to_tempfile():
     tmp.write(key)
     tmp.close()
     os.chmod(tmp.name, 0o600)
-    return tmp.name
+    path = tmp.name
+    if _RSA_TEMP_PATH is None:
+        _RSA_TEMP_PATH = path
+        atexit.register(_cleanup_rsa_tempfile)
+    return path
+
+
+def _cleanup_rsa_tempfile():
+    """atexit hook: remove the materialised RSA PEM tempfile."""
+    global _RSA_TEMP_PATH
+    if _RSA_TEMP_PATH:
+        try:
+            os.remove(_RSA_TEMP_PATH)
+        except OSError:
+            pass
+        _RSA_TEMP_PATH = None
 
 
 _SDK_CONFIGURED = False
@@ -142,6 +213,18 @@ def _configure_sdk_encryption():
     import futu as ft
     key_path = _rsa_key_to_tempfile()
     if key_path is None:
+        # Distinguish "never configured" from "legacy encrypted blob exists
+        # but the .encryption_key sidecar is gone" so the admin gets one
+        # actionable message instead of a per-account FileNotFoundError.
+        has_legacy = bool(get_config('futu_rsa_key_encrypted'))
+        if has_legacy:
+            raise RuntimeError(
+                "A legacy encrypted RSA key is still in the DB but its "
+                ".encryption_key sidecar is missing (a volume swap likely "
+                "dropped it). Re-paste the Futu RSA private key in the "
+                "tracker admin panel — it is now stored plainly and will "
+                "be self-contained going forward."
+            )
         raise RuntimeError(
             "No RSA private key configured. OpenD auto-generates one on "
             "first boot — run `docker compose logs opend | grep -A20 "
@@ -206,13 +289,15 @@ def get_account_balance(host, port, trd_env, acc_id, market):
 
     trd_ctx = _open_context(host, port, firm_name)
     try:
-        # Optionally unlock trade if an RSA key was configured. This is only
-        # required for order-placing operations; for balance queries alone
-        # you can leave it disabled. Skill guidance is to prefer unlocking
-        # via the OpenD GUI, but we honour the DB-stored key when present.
-        rsa_key = decrypt_rsa_key()
-        if rsa_key:
-            trd_ctx.unlock_trade(password='', password_md5=None, is_unlock=True)
+        # Optionally unlock trade. Only required for order-placing
+        # operations; balance queries work without it. Skill guidance is to
+        # prefer unlocking via the OpenD GUI, but we honour the DB-stored
+        # key when present. Since `_open_context` above already ran
+        # `_configure_sdk_encryption` (which would have raised if no key
+        # was loadable), reaching here means a key *is* configured — so we
+        # unlock unconditionally rather than re-reading the DB just to
+        # check presence.
+        trd_ctx.unlock_trade(password='', password_md5=None, is_unlock=True)
 
         ret, acc_list = trd_ctx.get_acc_list()
         if ret != ft.RET_OK:

@@ -15,7 +15,6 @@ from contextlib import contextmanager
 from flask import (Flask, render_template, request, jsonify, session,
                    redirect, url_for, flash)
 from werkzeug.security import generate_password_hash, check_password_hash
-from cryptography.fernet import Fernet
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', secrets.token_hex(32))
@@ -24,33 +23,20 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'data', 'portfolio.db')
-ENCRYPTION_KEY_FILE = os.path.join(os.path.dirname(__file__), 'data', '.encryption_key')
 
 
 # ─────────────────────────────────────────────
-# Encryption for API keys
+# Secrets (Futu RSA private key)
 # ─────────────────────────────────────────────
-def get_encryption_key():
-    """Get or create Fernet encryption key for API key storage."""
-    os.makedirs(os.path.dirname(ENCRYPTION_KEY_FILE), exist_ok=True)
-    if os.path.exists(ENCRYPTION_KEY_FILE):
-        with open(ENCRYPTION_KEY_FILE, 'rb') as f:
-            return f.read()
-    key = Fernet.generate_key()
-    with open(ENCRYPTION_KEY_FILE, 'wb') as f:
-        f.write(key)
-    os.chmod(ENCRYPTION_KEY_FILE, 0o600)
-    return key
-
-
-def encrypt_value(value: str) -> str:
-    f = Fernet(get_encryption_key())
-    return f.encrypt(value.encode()).decode()
-
-
-def decrypt_value(encrypted: str) -> str:
-    f = Fernet(get_encryption_key())
-    return f.decrypt(encrypted.encode()).decode()
+# The Futu RSA private key is stored as a plain PEM string in
+# config.futu_rsa_key. Earlier revisions encrypted it with a Fernet
+# sidecar key (/app/data/.encryption_key); that bought little real
+# protection (key + blob lived in the same volume) and created a
+# paired-secret footgun: a volume swap that kept the DB but dropped the
+# .encryption_key file would silently brick every sync with a cryptic
+# per-account FileNotFoundError. Storing the PEM plainly collapses two
+# artifacts into one self-contained DB row; the file's confidentiality
+# rests on the container volume + filesystem permissions (mode 0600).
 
 
 # ─────────────────────────────────────────────
@@ -519,7 +505,11 @@ def api_admin_config():
         # Return config (mask sensitive values)
         futu_host = get_config('futu_host', '127.0.0.1')
         futu_port = get_config('futu_port', '11111')
-        has_key = bool(get_config('futu_rsa_key_encrypted'))
+        # has_rsa_key: truthy if the plain futu_rsa_key is set, OR a legacy
+        # futu_rsa_key_encrypted blob is still around (will be migrated to
+        # plain on the next connect via futu_client._load_rsa_key).
+        has_key = bool(get_config('futu_rsa_key') or
+                       get_config('futu_rsa_key_encrypted'))
         inception_date = get_config('inception_date', '2024-01-01')
         initial_capital = get_config('initial_capital', '1000000')
 
@@ -543,7 +533,14 @@ def api_admin_config():
     if 'futu_port' in data:
         set_config('futu_port', str(data['futu_port']))
     if 'futu_rsa_key' in data and data['futu_rsa_key']:
-        set_config('futu_rsa_key_encrypted', encrypt_value(data['futu_rsa_key']))
+        # Store the PEM plainly (see the Secrets section header above for
+        # why we no longer Fernet-encrypt it). Drop any legacy encrypted
+        # blob so has_rsa_key and the migration don't keep chasing it.
+        set_config('futu_rsa_key', data['futu_rsa_key'])
+        with get_db() as conn:
+            conn.execute(
+                "DELETE FROM config WHERE key='futu_rsa_key_encrypted'"
+            )
     if 'inception_date' in data:
         set_config('inception_date', data['inception_date'])
     if 'initial_capital' in data:
