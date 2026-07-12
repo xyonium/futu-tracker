@@ -505,11 +505,11 @@ def api_admin_config():
         # Return config (mask sensitive values)
         futu_host = get_config('futu_host', '127.0.0.1')
         futu_port = get_config('futu_port', '11111')
-        # has_rsa_key: truthy if the plain futu_rsa_key is set, OR a legacy
-        # futu_rsa_key_encrypted blob is still around (will be migrated to
-        # plain on the next connect via futu_client._load_rsa_key).
-        has_key = bool(get_config('futu_rsa_key') or
-                       get_config('futu_rsa_key_encrypted'))
+        # has_rsa_key: truthy only when a plain futu_rsa_key is set. A
+        # legacy futu_rsa_key_encrypted blob (if one lingers from the old
+        # Fernet design) does NOT count — it's no longer usable and must be
+        # re-pasted via this panel.
+        has_key = bool(get_config('futu_rsa_key'))
         inception_date = get_config('inception_date', '2024-01-01')
         initial_capital = get_config('initial_capital', '1000000')
 
@@ -534,8 +534,9 @@ def api_admin_config():
         set_config('futu_port', str(data['futu_port']))
     if 'futu_rsa_key' in data and data['futu_rsa_key']:
         # Store the PEM plainly (see the Secrets section header above for
-        # why we no longer Fernet-encrypt it). Drop any legacy encrypted
-        # blob so has_rsa_key and the migration don't keep chasing it.
+        # why it's not Fernet-encrypted). Also evict any legacy
+        # futu_rsa_key_encrypted row left over from the old design so it
+        # can't masquerade as "configured".
         set_config('futu_rsa_key', data['futu_rsa_key'])
         with get_db() as conn:
             conn.execute(

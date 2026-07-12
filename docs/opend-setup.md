@@ -125,8 +125,17 @@ docker compose exec opend cat /rsa/rsa_private.pem
 ```
 
 复制整段 `-----BEGIN RSA PRIVATE KEY----- … -----END RSA PRIVATE KEY-----`
-（含首尾行），粘贴到 tracker 管理后台的 **RSA Key** 字段并保存。密钥在
-DB 里再用 Fernet 加密一次（`data/.encryption_key`），不会明文落盘。
+（含首尾行），粘贴到 tracker 管理后台的 **RSA Key** 字段并保存。
+
+> **存储方式**：密钥以 **明文 PEM** 形式存进 DB 的 `config.futu_rsa_key`
+> 一行，不再用 Fernet 做二次加密，也没有 `data/.encryption_key` 旁路文件。
+> 早期版本曾经用 「DB 内 Fernet 加密 + `data/.encryption_key` 配对」的方案，
+> 但两者必须成对存在，卷重建丢了任一个都会让同步静默全 0（2026-07-11 的
+> 事故即是此因），故已移除。明文落地在容器卷内、靠文件系统权限保护即可。
+>
+> 若旧库仍残留只读不出来的 `futu_rsa_key_encrypted` 旧记录，同步会直接报
+> 清晰的红字错误提示你重新粘贴一次 PEM（粘完后旧记录会被自动清掉）。
+> DB 不再有任何 `.encryption_key` 配对，卷重建不再可能因此让同步失效。
 
 ### 6. 配置 tracker 连 OpenD
 

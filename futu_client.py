@@ -32,9 +32,6 @@ from contextlib import contextmanager
 # import futu as ft
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'data', 'portfolio.db')
-# Legacy Fernet sidecar kept only for one-time migration of old
-# futu_rsa_key_encrypted blobs to a plain futu_rsa_key row.
-_ENCRYPTION_KEY_FILE = os.path.join(os.path.dirname(__file__), 'data', '.encryption_key')
 
 
 @contextmanager
@@ -57,53 +54,18 @@ def get_config(key, default=None):
 def _load_rsa_key():
     """Return the Futu RSA private-key PEM string from config, or None.
 
-    Storage model (current): the PEM lives plainly in config.futu_rsa_key.
-    No sidecar file is required, so a volume swap that keeps the DB cannot
-    brick sync the way the old .encryption_key arrangement did.
+    The PEM lives plainly in config.futu_rsa_key. No sidecar file is
+    required, so a volume swap that keeps the DB cannot brick sync the way
+    the old .encryption_key arrangement did.
 
-    Migration: older deployments stored a Fernet-encrypted blob in
-    futu_rsa_key_encrypted alongside a .encryption_key sidecar. If the
-    plain key is unset but both legacy artifacts exist, decrypt once,
-    persist as plain futu_rsa_key, and drop the encrypted blob + sidecar.
-    If the encrypted blob exists but the sidecar is MISSING (the exact
-    failure that caused the 2026-07-11 all-zero NAV), we cannot recover the
-    old key — return None and let the caller raise a clear, actionable
-    error telling the admin to re-paste the key, rather than per-account
-    FileNotFoundError noise.
+    Returns None when no plain key is configured — including the case of a
+    legacy `futu_rsa_key_encrypted` blob left over from the old Fernet
+    design, which is no longer auto-migrated (the cryptography dependency
+    and .encryption_key sidecar are gone). The caller raises a single
+    actionable "re-paste the key" error so the admin fixes it once, after
+    which the key is self-contained in the DB forever.
     """
-    plain = get_config('futu_rsa_key')
-    if plain:
-        return plain
-
-    encrypted = get_config('futu_rsa_key_encrypted')
-    if not encrypted:
-        return None
-
-    if not os.path.exists(_ENCRYPTION_KEY_FILE):
-        # Unrecoverable: the DB still has the encrypted blob but the Fernet
-        # key that decrypted it is gone. Don't pretend — surface a single
-        # clear message via the caller's RuntimeError.
-        return None
-
-    from cryptography.fernet import Fernet
-    with open(_ENCRYPTION_KEY_FILE, 'rb') as f:
-        key = f.read()
-    pem = Fernet(key).decrypt(encrypted.encode()).decode()
-
-    # Persist plainly and retire the legacy pair.
-    with get_db() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
-            ('futu_rsa_key', pem),
-        )
-        conn.execute(
-            "DELETE FROM config WHERE key='futu_rsa_key_encrypted'"
-        )
-    try:
-        os.remove(_ENCRYPTION_KEY_FILE)
-    except OSError:
-        pass  # best effort; the plain copy is what matters
-    return pem
+    return get_config('futu_rsa_key')
 
 
 # ─────────────────────────────────────────────
@@ -213,23 +175,22 @@ def _configure_sdk_encryption():
     import futu as ft
     key_path = _rsa_key_to_tempfile()
     if key_path is None:
-        # Distinguish "never configured" from "legacy encrypted blob exists
-        # but the .encryption_key sidecar is gone" so the admin gets one
-        # actionable message instead of a per-account FileNotFoundError.
+        # No plain futu_rsa_key is configured. Covers both "never set" and
+        # "only a legacy futu_rsa_key_encrypted blob remains" (the old
+        # Fernet design is gone, so the legacy blob — if present — is no
+        # longer auto-migrated). Either way the admin needs to paste the
+        # PEM once; from then on it's self-contained in the DB.
         has_legacy = bool(get_config('futu_rsa_key_encrypted'))
-        if has_legacy:
-            raise RuntimeError(
-                "A legacy encrypted RSA key is still in the DB but its "
-                ".encryption_key sidecar is missing (a volume swap likely "
-                "dropped it). Re-paste the Futu RSA private key in the "
-                "tracker admin panel — it is now stored plainly and will "
-                "be self-contained going forward."
-            )
+        legacy_hint = (
+            " (A legacy encrypted key blob is in the DB from the old "
+            "design — it can't be decrypted anymore; just re-paste the PEM.)"
+            if has_legacy else ""
+        )
         raise RuntimeError(
             "No RSA private key configured. OpenD auto-generates one on "
             "first boot — run `docker compose logs opend | grep -A20 "
             "'NEW RSA PRIVATE KEY'` and paste the block into the tracker "
-            "admin panel."
+            "admin panel." + legacy_hint
         )
     ft.SysConfig.enable_proto_encrypt(is_encrypt=True)
     ft.SysConfig.set_init_rsa_file(key_path)
