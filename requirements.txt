@@ -5,4 +5,4 @@ futu-api>=10.8.6808
 requests>=2.34.2
 gunicorn>=21.2
 # In-process cron for the daily-sync job (Asia/Hong_Kong timezone).
-APScheduler>=3.10
+APScheduler>=3.11.3
