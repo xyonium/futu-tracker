@@ -16,6 +16,14 @@ updates:
     labels:
       - "dependencies"
       - "docker"
+    ignore:
+      # Pin the Python base image at 3.12 (widest wheel coverage among
+      # current stable Pythons; futu-api and friends all ship 3.12 wheels).
+      # 3.13/3.14 are newer but slower-moving deps lack wheels there and
+      # would force source builds. Re-evaluate when the ecosystem catches
+      # up - until then don't open PRs nudging the minor past 3.12.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
