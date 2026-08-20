@@ -1,7 +1,7 @@
 flask>=3.1.3
 werkzeug>=3.1.8
 # Skill pack (openapi.futunn.com/futu-api-doc/intro/ai.html) requires >= 10.4.6408
-futu-api>=10.8.6808
+futu-api>=10.10.7008
 requests>=2.34.2
 gunicorn>=21.2
 # In-process cron for the daily-sync job (Asia/Hong_Kong timezone).
