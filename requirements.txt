@@ -3,6 +3,6 @@ werkzeug>=3.1.8
 # Skill pack (openapi.futunn.com/futu-api-doc/intro/ai.html) requires >= 10.4.6408
 futu-api>=10.8.6808
 requests>=2.34.2
-gunicorn>=21.2
+gunicorn>=26.1.0
 # In-process cron for the daily-sync job (Asia/Hong_Kong timezone).
 APScheduler>=3.10
